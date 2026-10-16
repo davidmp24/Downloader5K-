@@ -1,0 +1,50 @@
+# Ambientes Virtuais Python
+.venv/
+venv/
+ENV/
+env/
+*.env
+
+# Compilação e Bytecode Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.spec
+
+# Banco de dados SQLite local e arquivos temporários de dados
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/settings.json
+!data/.gitkeep
+
+# Arquivos de mídia e downloads locais
+*.mp4
+*.mkv
+*.webm
+*.mp3
+*.m4a
+*.flac
+*.wav
+*.opus
+*.part
+*.ytdl
+*.aria2
+
+# Logs e arquivos temporários do sistema
+*.log
+logs/
+.temp/
+tmp/
+
+# IDEs e Editores
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.gemini/
+
+# Arquivos de Sistema Operacional
+Thumbs.db
+desktop.ini
+.DS_Store
