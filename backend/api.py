@@ -336,12 +336,14 @@ async def delete_download(task_id: str, delete_file: bool = Query(False)):
 
 @app.delete("/api/downloads/clear/all")
 async def clear_all_downloads(delete_files: bool = Query(False)):
-    """Cancela downloads ativos e limpa todo o histórico de downloads do banco de dados (A6)."""
-    download_manager.cancel_all_downloads()
+    """Limpa do histórico e da tela apenas os arquivos já baixados/finalizados, sem interromper downloads ativos ou em fila."""
+    from backend.db import execute_write
 
     if delete_files:
         with get_db_connection() as conn:
-            rows = conn.execute("SELECT file_path FROM downloads WHERE file_path IS NOT NULL").fetchall()
+            rows = conn.execute(
+                "SELECT file_path FROM downloads WHERE status = 'completed' AND file_path IS NOT NULL"
+            ).fetchall()
             for r in rows:
                 fp = r["file_path"]
                 if fp and os.path.exists(fp):
@@ -350,9 +352,9 @@ async def clear_all_downloads(delete_files: bool = Query(False)):
                     except Exception:
                         pass
 
-    from backend.db import execute_write
-    execute_write("DELETE FROM downloads")
-    download_manager.active_tasks.clear()
+    # Exclui do banco APENAS registros de downloads já concluídos ou finalizados
+    # Mantém intactos downloads ativos ('downloading') ou em fila ('pending')
+    execute_write("DELETE FROM downloads WHERE status IN ('completed', 'error', 'cancelled')")
     return {"success": True, "cleared": True}
 
 @app.post("/api/shutdown")

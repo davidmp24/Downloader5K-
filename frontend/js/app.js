@@ -16,6 +16,8 @@ class DownloaderApp {
         this.historyDisplayLimit = 30;
         this.activeDisplayLimit = 30;
         this.duplicateEntriesIndices = new Set();
+        this.isBatchDownloading = false;
+        this.isSingleDownloading = false;
         this.ws = null;
         this.wsReconnectTimer = null;
 
@@ -729,6 +731,20 @@ class DownloaderApp {
     closeInspectorModal() {
         this.inspectorModal.classList.add('hidden');
         this.currentInspectedMedia = null;
+        this.isSingleDownloading = false;
+        if (this.btnConfirmDownload) {
+            this.btnConfirmDownload.disabled = false;
+            this.btnConfirmDownload.innerHTML = `
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span>Confirmar e Baixar</span>
+            `;
+        }
+        if (this.btnCancelInspector) this.btnCancelInspector.disabled = false;
+        if (this.btnCloseInspectorModal) this.btnCloseInspectorModal.disabled = false;
     }
 
     // ==========================================
@@ -909,6 +925,21 @@ class DownloaderApp {
     closePlaylistModal() {
         this.playlistModal.classList.add('hidden');
         this.currentPlaylist = null;
+        this.isBatchDownloading = false;
+        if (this.btnCancelPlaylist) this.btnCancelPlaylist.disabled = false;
+        if (this.btnClosePlaylistModal) this.btnClosePlaylistModal.disabled = false;
+        if (this.btnConfirmPlaylistDownload) {
+            this.btnConfirmPlaylistDownload.innerHTML = `
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span id="btnConfirmPlaylistText">Baixar Selecionados (${this.selectedPlaylistEntries ? this.selectedPlaylistEntries.size : 0})</span>
+            `;
+            this.btnConfirmPlaylistText = document.getElementById('btnConfirmPlaylistText');
+            this.btnConfirmPlaylistDownload.disabled = (!this.selectedPlaylistEntries || this.selectedPlaylistEntries.size === 0);
+        }
     }
 
     togglePlaylistEntry(index, isChecked) {
@@ -951,8 +982,12 @@ class DownloaderApp {
     updatePlaylistCounter() {
         const count = this.selectedPlaylistEntries.size;
         this.playlistSelectedCount.textContent = count;
-        this.btnConfirmPlaylistText.textContent = `Baixar Selecionados (${count})`;
-        this.btnConfirmPlaylistDownload.disabled = (count === 0);
+        if (this.btnConfirmPlaylistText) {
+            this.btnConfirmPlaylistText.textContent = `Baixar Selecionados (${count})`;
+        }
+        if (!this.isBatchDownloading && this.btnConfirmPlaylistDownload) {
+            this.btnConfirmPlaylistDownload.disabled = (count === 0);
+        }
     }
 
     switchPlaylistTab(tab) {
@@ -965,9 +1000,24 @@ class DownloaderApp {
 
     async confirmPlaylistDownload() {
         if (!this.currentPlaylist || this.selectedPlaylistEntries.size === 0) return;
+        if (this.isBatchDownloading) return;
+
+        this.isBatchDownloading = true;
 
         const allEntries = this.currentPlaylist.entries || [];
         const selectedEntries = allEntries.filter((_, idx) => this.selectedPlaylistEntries.has(idx));
+        const count = selectedEntries.length;
+
+        // Feedback imediato no botão para o usuário e bloqueio contra múltiplos cliques
+        this.btnConfirmPlaylistDownload.disabled = true;
+        if (this.btnCancelPlaylist) this.btnCancelPlaylist.disabled = true;
+        if (this.btnClosePlaylistModal) this.btnClosePlaylistModal.disabled = true;
+
+        this.btnConfirmPlaylistDownload.innerHTML = `
+            <div class="spinner" style="border-top-color: #050b14; width: 16px; height: 16px; margin-right: 6px;"></div>
+            <span id="btnConfirmPlaylistText">Iniciando downloads (${count})...</span>
+        `;
+        this.showToast(`Preparando e enfileirando ${count} download(s)...`, 'info');
 
         let downloadType = this.playlistTab;
         let formatNote = '';
@@ -1004,8 +1054,6 @@ class DownloaderApp {
             options.embed_subtitles = this.settings.embed_subtitles !== false;
             options.subtitles_langs = this.settings.subtitles_langs || 'pt,en';
         }
-
-        this.btnConfirmPlaylistDownload.disabled = true;
 
         try {
             const res = await fetch('/api/download/batch', {
@@ -1049,13 +1097,37 @@ class DownloaderApp {
             }
         } catch (err) {
             this.showToast(err.message, 'error');
-        } finally {
+            this.btnConfirmPlaylistDownload.innerHTML = `
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span id="btnConfirmPlaylistText">Baixar Selecionados (${count})</span>
+            `;
+            this.btnConfirmPlaylistText = document.getElementById('btnConfirmPlaylistText');
             this.btnConfirmPlaylistDownload.disabled = false;
+            if (this.btnCancelPlaylist) this.btnCancelPlaylist.disabled = false;
+            if (this.btnClosePlaylistModal) this.btnClosePlaylistModal.disabled = false;
+        } finally {
+            this.isBatchDownloading = false;
         }
     }
 
     async confirmDownload() {
         if (!this.currentInspectedMedia) return;
+        if (this.isSingleDownloading) return;
+
+        this.isSingleDownloading = true;
+        this.btnConfirmDownload.disabled = true;
+        if (this.btnCancelInspector) this.btnCancelInspector.disabled = true;
+        if (this.btnCloseInspectorModal) this.btnCloseInspectorModal.disabled = true;
+
+        const originalBtnHtml = this.btnConfirmDownload.innerHTML;
+        this.btnConfirmDownload.innerHTML = `
+            <div class="spinner" style="border-top-color: #050b14; width: 16px; height: 16px; margin-right: 6px;"></div>
+            <span>Iniciando download...</span>
+        `;
 
         const media = this.currentInspectedMedia;
         const isVideo = this.selectedTab === 'video';
@@ -1137,6 +1209,12 @@ class DownloaderApp {
             this.renderActiveDownloads();
         } catch (err) {
             this.showToast(err.message, 'error');
+            this.btnConfirmDownload.innerHTML = originalBtnHtml;
+            this.btnConfirmDownload.disabled = false;
+            if (this.btnCancelInspector) this.btnCancelInspector.disabled = false;
+            if (this.btnCloseInspectorModal) this.btnCloseInspectorModal.disabled = false;
+        } finally {
+            this.isSingleDownloading = false;
         }
     }
 
@@ -1397,24 +1475,27 @@ class DownloaderApp {
     }
 
     async clearHistory() {
-        if (!this.history || this.history.length === 0) {
-            this.showToast('A biblioteca já está vazia.', 'info');
+        // Verifica se há arquivos já baixados (concluídos/finalizados) para limpar da tela
+        const finishedItems = (this.history || []).filter(item => item.status === 'completed' || item.status === 'error' || item.status === 'cancelled');
+        if (finishedItems.length === 0) {
+            this.showToast('Nenhum arquivo baixado para limpar da tela.', 'info');
             return;
         }
 
-        if (!confirm('Deseja limpar todos os downloads da biblioteca? A tela ficará vazia.')) {
+        if (!confirm('Deseja limpar da tela os arquivos já baixados? Os downloads ativos e na fila continuarão normalmente.')) {
             return;
         }
 
         try {
             const res = await fetch('/api/downloads/clear/all', { method: 'DELETE' });
             if (res.ok) {
-                this.history = [];
+                // Remove apenas os itens já baixados/finalizados da lista local, mantendo downloads em andamento e em fila intactos
+                this.history = (this.history || []).filter(item => item.status === 'downloading' || item.status === 'pending');
                 this.renderHistory();
-                this.showToast('Biblioteca de downloads limpa com sucesso!', 'success');
+                this.showToast('Arquivos baixados limpos da tela com sucesso!', 'success');
             } else {
                 const err = await res.json();
-                throw new Error(err.detail || 'Erro ao limpar downloads.');
+                throw new Error(err.detail || 'Erro ao limpar arquivos baixados.');
             }
         } catch (err) {
             this.showToast(err.message, 'error');
