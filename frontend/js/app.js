@@ -273,6 +273,7 @@ class DownloaderApp {
                     clearInterval(this.wsReconnectTimer);
                     this.wsReconnectTimer = null;
                 }
+                this.syncActiveDownloads();
             };
 
             this.ws.onmessage = (event) => {
@@ -301,15 +302,72 @@ class DownloaderApp {
         }
     }
 
+    async syncActiveDownloads() {
+        try {
+            const res = await fetch('/api/downloads/active');
+            if (res.ok) {
+                const activeList = await res.json();
+                if (Array.isArray(activeList)) {
+                    let changed = false;
+                    for (const item of activeList) {
+                        if (!this.activeDownloads.has(item.id)) {
+                            this.activeDownloads.set(item.id, {
+                                id: item.id,
+                                title: item.title,
+                                thumbnail: item.thumbnail,
+                                type: item.type,
+                                format_note: item.format_note,
+                                progress: item.progress || 0,
+                                speed: '',
+                                eta: '',
+                                status: item.status || 'downloading'
+                            });
+                            changed = true;
+                        }
+                    }
+                    if (changed) this.renderActiveDownloads();
+                }
+            }
+        } catch (e) {
+            console.warn('Falha ao sincronizar downloads ativos:', e);
+        }
+    }
+
+    scheduleLoadHistory(delay = 500) {
+        if (this.loadHistoryTimeout) {
+            clearTimeout(this.loadHistoryTimeout);
+        }
+        this.loadHistoryTimeout = setTimeout(() => {
+            this.loadHistory();
+        }, delay);
+    }
+
     handleProgressUpdate(update) {
         const { id, status, progress, speed, eta, file_size, file_size_formatted, error_message } = update;
-        const task = this.activeDownloads.get(id);
+        let task = this.activeDownloads.get(id);
+
+        // Se o card não estava no mapa (ex: após recarregar a página), recupera dinamicamente (A7)
+        if (!task && ['downloading', 'processing', 'pending'].includes(status)) {
+            task = {
+                id,
+                title: 'Download em andamento',
+                thumbnail: '',
+                type: 'video',
+                format_note: '',
+                progress: progress || 0,
+                speed: speed || '',
+                eta: eta || '',
+                status: status
+            };
+            this.activeDownloads.set(id, task);
+            this.renderActiveDownloads();
+        }
 
         if (status === 'completed') {
             this.showToast(`Download concluído: "${task?.title || 'Arquivo'}"!`, 'success');
             this.activeDownloads.delete(id);
             this.renderActiveDownloads();
-            this.loadHistory(); // Atualiza histórico
+            this.scheduleLoadHistory();
             return;
         }
 
@@ -317,7 +375,7 @@ class DownloaderApp {
             this.showToast(`Download cancelado.`, 'warning');
             this.activeDownloads.delete(id);
             this.renderActiveDownloads();
-            this.loadHistory();
+            this.scheduleLoadHistory();
             return;
         }
 
@@ -325,7 +383,7 @@ class DownloaderApp {
             this.showToast(`Erro no download: ${error_message || 'Falha de rede/FFmpeg.'}`, 'error');
             this.activeDownloads.delete(id);
             this.renderActiveDownloads();
-            this.loadHistory();
+            this.scheduleLoadHistory();
             return;
         }
 
@@ -423,7 +481,7 @@ class DownloaderApp {
     async chooseFolderForModal(target) {
         this.showToast('Selecione a pasta na janela do Windows...', 'info');
         try {
-            const res = await fetch('/api/select-folder', { method: 'POST' });
+            const res = await fetch('/api/select-folder?save_as_default=false', { method: 'POST' });
             const data = await res.json();
             if (data.selected && data.download_dir) {
                 if (target === 'inspector' && this.inspectorDownloadDir) {
@@ -431,9 +489,7 @@ class DownloaderApp {
                 } else if (target === 'playlist' && this.playlistDownloadDir) {
                     this.playlistDownloadDir.value = data.download_dir;
                 }
-                this.settings.download_dir = data.download_dir;
-                if (this.settingDownloadDir) this.settingDownloadDir.value = data.download_dir;
-                this.showToast(`Pasta de destino definida: ${data.download_dir}`, 'success');
+                this.showToast(`Pasta para este download: ${data.download_dir}`, 'success');
             }
         } catch (e) {
             this.showToast('Erro ao selecionar pasta.', 'error');
@@ -441,9 +497,10 @@ class DownloaderApp {
     }
 
     async saveSettingsFromModal() {
+        const downloadDirVal = this.settingDownloadDir.value.trim() || this.settings.download_dir || '';
         const payload = {
             smart_mode: this.settingSmartModeToggle.checked,
-            download_dir: this.settingDownloadDir.value,
+            download_dir: downloadDirVal,
             organize_by_genre: this.settingOrganizeGenre ? this.settingOrganizeGenre.checked : true,
             default_type: this.settingDefaultType.value,
             default_quality: this.settingDefaultQuality.value,
@@ -667,9 +724,23 @@ class DownloaderApp {
             .replace(/'/g, '&#039;');
     }
 
+    formatHistoryDate(dateStr) {
+        if (!dateStr) return '';
+        try {
+            const iso = dateStr.includes('T') ? dateStr : dateStr.replace(' ', 'T') + 'Z';
+            const d = new Date(iso);
+            if (isNaN(d.getTime())) return dateStr;
+            return d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        } catch {
+            return dateStr;
+        }
+    }
+
     normalizeTitle(title) {
         if (!title) return '';
         return title
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
             .toLowerCase()
             .replace(/[\(\)\[\]\{\}\-_,.:;!?|/\\~`"'^]/g, ' ')
             .replace(/\s+/g, ' ')
@@ -869,9 +940,16 @@ class DownloaderApp {
         } else {
             const audioFmt = this.selectPlaylistAudioFormat.value;
             const audioBitrate = this.selectPlaylistAudioBitrate.value;
-            formatNote = `${audioFmt.toUpperCase()} (${audioBitrate}k)`;
+            const bitrateLabel = (audioBitrate === '0' || audioBitrate === 0) ? 'Melhor Qualidade' : `${audioBitrate}k`;
+            formatNote = `${audioFmt.toUpperCase()} (${bitrateLabel})`;
             options.audio_format = audioFmt;
             options.audio_quality = audioBitrate;
+            options.embed_cover = true;
+        }
+
+        if (downloadType === 'video') {
+            options.embed_subtitles = this.settings.embed_subtitles !== false;
+            options.subtitles_langs = this.settings.subtitles_langs || 'pt,en';
         }
 
         this.btnConfirmPlaylistDownload.disabled = true;
@@ -952,7 +1030,8 @@ class DownloaderApp {
             options.embed_subtitles = this.checkEmbedSubs.checked;
         } else {
             const aud = this.selectedAudio || { format: 'mp3', quality: '320' };
-            formatNote = `${aud.format.toUpperCase()} (${aud.quality}k)`;
+            const bitrateLabel = (aud.quality === '0' || aud.quality === 0) ? 'Melhor Qualidade' : `${aud.quality}k`;
+            formatNote = `${aud.format.toUpperCase()} (${bitrateLabel})`;
             options.audio_format = aud.format;
             options.audio_quality = aud.quality;
             options.embed_cover = this.checkEmbedCover.checked;
@@ -1205,32 +1284,38 @@ class DownloaderApp {
 
             const isDone = item.status === 'completed';
             const sizeStr = item.file_size ? `${(item.file_size / (1024 * 1024)).toFixed(1)} MB` : '';
+            const safeTitle = this.escapeHtml(item.title || 'Vídeo sem título');
+            const safeAuthor = this.escapeHtml(item.author || 'YouTube');
+            const safeFormat = this.escapeHtml(item.format_note || item.type.toUpperCase());
+            const safeThumb = item.thumbnail && item.thumbnail.startsWith('http') ? encodeURI(item.thumbnail) : 'https://placehold.co/100x58/141824/64748b?text=Mídia';
+            const safeDate = this.formatHistoryDate(item.created_at);
+            const safeId = encodeURIComponent(item.id || '');
 
             card.innerHTML = `
                 <div class="history-thumb">
-                    <img src="${item.thumbnail || 'https://placehold.co/100x58/141824/64748b?text=Mídia'}" alt="Thumb" onerror="this.src='https://placehold.co/100x58/141824/64748b?text=Mídia'"/>
+                    <img src="${safeThumb}" alt="Thumb" onerror="this.src='https://placehold.co/100x58/141824/64748b?text=Mídia'"/>
                 </div>
                 <div class="history-info">
-                    <h4 class="history-title" title="${item.title}">${item.title}</h4>
+                    <h4 class="history-title" title="${safeTitle}">${safeTitle}</h4>
                     <div class="history-meta">
-                        <span class="history-badge ${item.type}">${item.format_note || item.type.toUpperCase()}</span>
-                        <span>${item.author || 'YouTube'}</span>
+                        <span class="history-badge ${this.escapeHtml(item.type)}">${safeFormat}</span>
+                        <span>${safeAuthor}</span>
                         ${sizeStr ? `<span>• ${sizeStr}</span>` : ''}
-                        <span>• ${new Date(item.created_at).toLocaleDateString('pt-BR')}</span>
+                        <span>• ${safeDate}</span>
                     </div>
                 </div>
                 <div class="history-actions">
                     ${isDone ? `
-                        <button class="btn-action-small play" onclick="window.app.playMedia('${item.id}')" title="Reproduzir no Windows">
+                        <button class="btn-action-small play" onclick="window.app.playMedia('${safeId}')" title="Reproduzir no Windows">
                             ▶ Reproduzir
                         </button>
-                        <button class="btn-action-small" onclick="window.app.openFolder('${item.id}')" title="Mostrar na Pasta do Windows">
+                        <button class="btn-action-small" onclick="window.app.openFolder('${safeId}')" title="Mostrar na Pasta do Windows">
                             📁 Abrir Pasta
                         </button>
                     ` : `
-                        <span class="badge ${item.status}">${item.status}</span>
+                        <span class="badge ${this.escapeHtml(item.status)}">${this.escapeHtml(item.status)}</span>
                     `}
-                    <button class="btn-action-small danger" onclick="window.app.deleteMedia('${item.id}')" title="Excluir do Histórico">
+                    <button class="btn-action-small danger" onclick="window.app.deleteMedia('${safeId}')" title="Excluir do Histórico">
                         🗑
                     </button>
                 </div>

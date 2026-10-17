@@ -6,34 +6,42 @@ import webbrowser
 import threading
 import subprocess
 
-# Garante suporte seguro a stdout/stderr mesmo sem console
+LOG_DIR = os.path.join(os.getenv("LOCALAPPDATA", os.path.expanduser("~")), "Downloader5K", "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "app.log")
+
+# Garante suporte seguro a stdout/stderr gravando em log para diagnóstico
 if sys.stdout is None:
-    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    sys.stdout = open(LOG_FILE, "a", encoding="utf-8")
 if sys.stderr is None:
-    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    sys.stderr = open(LOG_FILE, "a", encoding="utf-8")
+
+import re
 
 def kill_stale_process_on_port(port: int = 8000):
-    """Encerra processos órfãos na porta para evitar conflitos de segundo plano."""
+    """Encerra processos órfãos na porta exata :8000 para evitar conflitos."""
     try:
         current_pid = str(os.getpid())
         output = subprocess.check_output(
-            f"netstat -ano | findstr :{port}",
+            "netstat -ano",
             shell=True,
             stderr=subprocess.DEVNULL
         ).decode("latin-1", errors="ignore")
 
+        port_pattern = re.compile(rf":{port}\s+")
         for line in output.strip().splitlines():
-            parts = line.strip().split()
-            if len(parts) >= 5 and "LISTENING" in parts:
-                pid = parts[-1]
-                if pid.isdigit() and pid != current_pid and pid != "0":
-                    subprocess.run(
-                        f"taskkill /F /PID {pid}",
-                        shell=True,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                    time.sleep(0.3)
+            if "LISTENING" in line and port_pattern.search(line):
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    pid = parts[-1]
+                    if pid.isdigit() and pid != current_pid and pid != "0":
+                        subprocess.run(
+                            f"taskkill /F /PID {pid}",
+                            shell=True,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                        time.sleep(0.3)
     except Exception:
         pass
 

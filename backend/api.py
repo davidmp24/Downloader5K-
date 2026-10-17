@@ -3,6 +3,7 @@ import os
 import sys
 import asyncio
 import logging
+import threading
 import subprocess
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -13,14 +14,50 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.db import init_db, get_db_connection, load_settings, save_settings
+from backend.db import init_db, get_db_connection, load_settings, save_settings, DEFAULT_DOWNLOAD_DIR
 from backend.downloader import MediaInspector, download_manager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("DownloaderAPI")
 
+# Whitelist de formatos e resoluções para segurança (C4)
+ALLOWED_RESOLUTIONS = {"best", "4320", "2160", "1440", "1080", "720", "480", "360", "240", "144"}
+ALLOWED_CONTAINERS = {"mp4", "mkv", "webm", "mov"}
+ALLOWED_AUDIO_FORMATS = {"mp3", "m4a", "flac", "wav", "opus"}
+ALLOWED_AUDIO_QUALITIES = {"0", "320", "256", "192", "128", "96", "64"}
+
+_folder_dialog_lock = threading.Lock()
+
+def validate_and_sanitize_options(options: Dict[str, Any]) -> Dict[str, Any]:
+    """Valida e sanitiza caminhos e parâmetros de formato recebidos do cliente (C4)."""
+    sanitized = dict(options or {})
+    dest_dir = sanitized.get("dest_dir")
+    settings = load_settings()
+
+    if not dest_dir:
+        dest_dir = settings.get("download_dir", DEFAULT_DOWNLOAD_DIR)
+
+    dest_path = os.path.normpath(os.path.abspath(dest_dir))
+    win_dir = os.environ.get("SystemRoot", "C:\\Windows")
+    if dest_path.lower().startswith(win_dir.lower()):
+        dest_path = DEFAULT_DOWNLOAD_DIR
+
+    sanitized["dest_dir"] = dest_path
+
+    if "resolution" in sanitized and str(sanitized["resolution"]) not in ALLOWED_RESOLUTIONS:
+        sanitized["resolution"] = "1080"
+    if "container" in sanitized and sanitized["container"].lower() not in ALLOWED_CONTAINERS:
+        sanitized["container"] = "mp4"
+    if "audio_format" in sanitized and sanitized["audio_format"].lower() not in ALLOWED_AUDIO_FORMATS:
+        sanitized["audio_format"] = "mp3"
+    if "audio_quality" in sanitized and str(sanitized["audio_quality"]) not in ALLOWED_AUDIO_QUALITIES:
+        sanitized["audio_quality"] = "320"
+
+    return sanitized
+
+
 class ConnectionManager:
-    """Gerencia conexões WebSocket ativas para streaming em tempo real e auto-shutdown."""
+    """Gerencia conexões WebSocket ativas para streaming em tempo real e auto-shutdown seguro (C2, A1)."""
 
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -54,15 +91,20 @@ class ConnectionManager:
         """Agenda encerramento seguro do processo python caso nenhuma aba seja aberta."""
         if self.shutdown_timer:
             self.shutdown_timer.cancel()
+            self.shutdown_timer = None
 
-        logger.info(f"Nenhuma janela web ativa. Servidor será encerrado em {delay}s...")
+        logger.info(f"Nenhuma janela web ativa. Servidor será encerrado em {delay}s caso não haja atividade...")
 
         def _do_shutdown():
+            if len(self.active_connections) > 0:
+                logger.info("Shutdown cancelado: conexão WebSocket ainda ativa.")
+                return
+            if len(download_manager.active_tasks) > 0:
+                logger.info("Shutdown adiado: downloads ainda em andamento.")
+                self.schedule_shutdown(delay=10.0)
+                return
             logger.info("Janela do sistema fechada pelo usuário. Encerrando servidor Python automaticamente.")
             os._exit(0)
-
-        if self.loop and self.loop.is_running():
-            self.shutdown_timer = self.loop.call_later(delay, _do_shutdown)
 
         if self.loop and self.loop.is_running():
             self.shutdown_timer = self.loop.call_later(delay, _do_shutdown)
@@ -87,7 +129,6 @@ ws_manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Inicialização
     init_db()
     ws_manager.loop = asyncio.get_running_loop()
     download_manager.set_broadcast_callback(ws_manager.broadcast)
@@ -97,36 +138,34 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Downloader5K API", lifespan=lifespan)
 
+# CORS restrito exclusivamente às origens locais seguras (C3)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+        "http://127.0.0.1",
+        "http://localhost",
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
-# Caminho do Frontend
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
 
-# WebSocket para acompanhamento de downloads em tempo real
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await ws_manager.connect(websocket)
     try:
         while True:
-            # Mantém conexão viva aguardando pings do cliente
-            data = await websocket.receive_text()
+            await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
-    except Exception as e:
-        logger.warning(f"Exceção no WebSocket: {e}")
-        ws_manager.disconnect(websocket)
 
-# Endpoints da API
-
-@app.post("/api/inspect")
-async def inspect_url(payload: Dict[str, str] = Body(...)):
-    url = payload.get("url", "").strip()
+@app.get("/api/inspect")
+async def inspect_url(url: str = Query(...)):
+    """Inspeciona URL e extrai títulos, durações e resoluções."""
     if not url:
         raise HTTPException(status_code=400, detail="URL inválida ou vazia.")
 
@@ -150,10 +189,12 @@ async def start_download(payload: Dict[str, Any] = Body(...)):
     duration = payload.get("duration", 0)
     download_type = payload.get("download_type", "video")
     format_note = payload.get("format_note", "")
-    options = payload.get("options", {})
+    raw_options = payload.get("options", {})
 
     if not url:
         raise HTTPException(status_code=400, detail="URL obrigatória.")
+
+    options = validate_and_sanitize_options(raw_options)
 
     task_id = download_manager.create_download(
         url=url,
@@ -174,10 +215,12 @@ async def start_batch_download(payload: Dict[str, Any] = Body(...)):
     items = payload.get("items", [])
     download_type = payload.get("download_type", "video")
     format_note = payload.get("format_note", "")
-    options = payload.get("options", {})
+    raw_options = payload.get("options", {})
 
     if not items:
         raise HTTPException(status_code=400, detail="Nenhum vídeo selecionado na playlist.")
+
+    options = validate_and_sanitize_options(raw_options)
 
     created_tasks = []
     for item in items:
@@ -228,7 +271,7 @@ async def smart_download(payload: Dict[str, str] = Body(...)):
         return {"is_playlist": True, "info": info}
 
     download_type = settings.get("default_type", "video")
-    options = {
+    raw_options = {
         "dest_dir": settings.get("download_dir"),
         "resolution": settings.get("default_quality", "1080"),
         "container": settings.get("default_video_format", "mp4"),
@@ -237,6 +280,7 @@ async def smart_download(payload: Dict[str, str] = Body(...)):
         "embed_subtitles": settings.get("embed_subtitles", True),
         "organize_by_genre": settings.get("organize_by_genre", True),
     }
+    options = validate_and_sanitize_options(raw_options)
 
     if download_type == "audio":
         format_note = f"{options['audio_format'].upper()} ({options['audio_quality']}k)"
@@ -258,12 +302,18 @@ async def smart_download(payload: Dict[str, str] = Body(...)):
 
 @app.get("/api/downloads")
 async def get_downloads():
+    """Retorna histórico de downloads ordenado com limite."""
     return download_manager.get_all_downloads()
+
+@app.get("/api/downloads/active")
+async def get_active_downloads():
+    """Retorna downloads atualmente em andamento ou na fila para ressincronização da tela (A7)."""
+    return download_manager.get_active_tasks_summary()
 
 @app.post("/api/downloads/cancel-all")
 async def cancel_all_downloads():
     cancelled_count = download_manager.cancel_all_downloads()
-    return {"status": "cancelled", "count": cancelled_count}
+    return {"success": True, "cancelled_count": cancelled_count}
 
 @app.post("/api/downloads/{task_id}/cancel")
 async def cancel_download(task_id: str):
@@ -277,7 +327,9 @@ async def delete_download(task_id: str, delete_file: bool = Query(False)):
 
 @app.delete("/api/downloads/clear/all")
 async def clear_all_downloads(delete_files: bool = Query(False)):
-    """Limpa todo o histórico de downloads do banco de dados e da tela."""
+    """Cancela downloads ativos e limpa todo o histórico de downloads do banco de dados (A6)."""
+    download_manager.cancel_all_downloads()
+
     if delete_files:
         with get_db_connection() as conn:
             rows = conn.execute("SELECT file_path FROM downloads WHERE file_path IS NOT NULL").fetchall()
@@ -296,9 +348,13 @@ async def clear_all_downloads(delete_files: bool = Query(False)):
 
 @app.post("/api/shutdown")
 async def shutdown_system():
-    """Recebe notificação de fechamento do navegador para desligar o servidor Python automaticamente."""
-    logger.info("Recebida notificação de fechamento da aba via beacon.")
-    ws_manager.schedule_shutdown(delay=2.5)
+    """Recebe notificação de fechamento do navegador para desligar o servidor Python automaticamente (C2, A1)."""
+    if len(ws_manager.active_connections) > 0:
+        return {"status": "cancelled", "reason": "other_tabs_open"}
+    if len(download_manager.active_tasks) > 0:
+        return {"status": "delayed", "reason": "active_downloads"}
+    logger.info("Recebida solicitação de encerramento do sistema.")
+    ws_manager.schedule_shutdown(delay=3.0)
     return {"status": "shutting_down"}
 
 @app.post("/api/downloads/{task_id}/open-folder")
@@ -307,21 +363,20 @@ async def open_download_folder(task_id: str):
         row = conn.execute("SELECT file_path FROM downloads WHERE id = ?", (task_id,)).fetchone()
         if not row or not row["file_path"]:
             raise HTTPException(status_code=404, detail="Arquivo não localizado no histórico.")
-        
+
         file_path = os.path.normpath(row["file_path"])
         if os.path.exists(file_path):
             try:
-                # No Windows, abre o explorer selecionando o arquivo baixado
-                subprocess.run(["explorer", f"/select,{file_path}"], check=False)
+                # Executa explorer em thread separada para não bloquear o event loop (M11)
+                await asyncio.to_thread(subprocess.run, ["explorer", f"/select,{file_path}"], False)
                 return {"success": True}
             except Exception as e:
                 logger.error(f"Erro ao abrir explorer: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
         else:
-            # Se o arquivo não existir mais, tenta abrir a pasta pai
             parent_dir = os.path.dirname(file_path)
             if os.path.exists(parent_dir):
-                os.startfile(parent_dir)
+                await asyncio.to_thread(os.startfile, parent_dir)
                 return {"success": True, "note": "Arquivo ausente, pasta aberta."}
             raise HTTPException(status_code=404, detail="Arquivo e pasta não encontrados.")
 
@@ -331,16 +386,18 @@ async def play_download(task_id: str):
         row = conn.execute("SELECT file_path FROM downloads WHERE id = ?", (task_id,)).fetchone()
         if not row or not row["file_path"]:
             raise HTTPException(status_code=404, detail="Arquivo não encontrado no histórico.")
-        
+
         file_path = os.path.normpath(row["file_path"])
         if os.path.exists(file_path):
             try:
-                os.startfile(file_path)
+                # Executa startfile em thread separada para não bloquear o event loop (M11)
+                await asyncio.to_thread(os.startfile, file_path)
                 return {"success": True}
             except Exception as e:
+                logger.error(f"Erro ao reproduzir arquivo: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
         else:
-            raise HTTPException(status_code=404, detail="Arquivo físico não existe no disco.")
+            raise HTTPException(status_code=404, detail="Arquivo físico não existe mais no disco.")
 
 @app.get("/api/settings")
 async def get_settings():
@@ -352,31 +409,34 @@ async def update_settings(payload: Dict[str, Any] = Body(...)):
     return updated
 
 @app.post("/api/select-folder")
-async def select_folder_dialog():
-    """Abre a janela nativa do Windows para escolha de pasta de download."""
-    loop = asyncio.get_running_loop()
+async def select_folder_dialog(save_as_default: bool = Query(True)):
+    """Abre diálogo nativo de pasta com trava para impedir instâncias duplicadas (B8) e respeita save_as_default (M10)."""
+    if _folder_dialog_lock.locked():
+        raise HTTPException(status_code=409, detail="Seletor de pasta já está aberto.")
 
     def _open_dialog():
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()
-        root.attributes("-topmost", True)
-        settings = load_settings()
-        current_dir = settings.get("download_dir", "")
-        selected = filedialog.askdirectory(
-            initialdir=current_dir if os.path.exists(current_dir) else None,
-            title="Selecione a Pasta para Salvar os Downloads"
-        )
-        root.destroy()
-        return selected
+        with _folder_dialog_lock:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            settings = load_settings()
+            current_dir = settings.get("download_dir", "")
+            selected = filedialog.askdirectory(
+                initialdir=current_dir if (current_dir and os.path.exists(current_dir)) else None,
+                title="Selecione a Pasta para Salvar os Downloads"
+            )
+            root.destroy()
+            return selected
 
     try:
-        chosen_dir = await loop.run_in_executor(None, _open_dialog)
+        chosen_dir = await asyncio.to_thread(_open_dialog)
         if chosen_dir:
             normalized = os.path.normpath(chosen_dir)
-            save_settings({"download_dir": normalized})
-            return {"download_dir": normalized, "selected": True}
+            if save_as_default:
+                save_settings({"download_dir": normalized})
+            return {"download_dir": normalized, "selected": True, "saved_as_default": save_as_default}
         return {"selected": False}
     except Exception as e:
         logger.error(f"Erro no seletor de pasta: {e}")

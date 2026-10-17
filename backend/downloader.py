@@ -11,7 +11,7 @@ import sqlite3
 from typing import Dict, Any, List, Optional, Callable
 import yt_dlp
 
-from backend.db import get_db_connection, load_settings, execute_write
+from backend.db import get_db_connection, load_settings, execute_write, get_all_downloads as db_get_all_downloads, create_downloads_batch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("DownloaderCore")
@@ -19,8 +19,14 @@ logger = logging.getLogger("DownloaderCore")
 def format_bytes(size: Optional[float]) -> str:
     if not size or size <= 0:
         return "0 B"
-    units = ["B", "KB", "MB", "GB", "TB"]
+    if size < 1:
+        return f"{size:.2f} B"
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
     i = int(math.floor(math.log(size, 1024)))
+    if i < 0:
+        i = 0
+    elif i >= len(units):
+        i = len(units) - 1
     p = math.pow(1024, i)
     s = round(size / p, 2)
     return f"{s} {units[i]}"
@@ -58,15 +64,14 @@ def classify_media_genre(info: Dict[str, Any]) -> str:
     if raw_genre and isinstance(raw_genre, str) and len(raw_genre.strip()) > 1:
         return sanitize_folder_name(raw_genre.title())
 
-    # Agrega todo o texto disponível para análise em caixa baixa
+    # Agrega apenas metadados de alta relevância (título, canal, artista e tags) evitando poluição de descrições (M1)
     title = (info.get("title") or "").lower()
     uploader = (info.get("uploader") or info.get("channel") or info.get("creator") or "").lower()
     artist = (info.get("artist") or "").lower()
     tags = [t.lower() for t in (info.get("tags") or []) if isinstance(t, str)]
     categories = [c.lower() for c in (info.get("categories") or []) if isinstance(c, str)]
-    desc = (info.get("description") or "")[:1000].lower()
 
-    combined_text = f"{title} {uploader} {artist} {' '.join(tags)} {desc}"
+    primary_text = f"{title} {uploader} {artist} {' '.join(tags)}"
 
     GENRE_RULES = [
         # Gêneros Musicais
@@ -80,12 +85,12 @@ def classify_media_genre(info: Dict[str, Any]) -> str:
                 "led zeppelin", "black sabbath", "deep purple", "scorpions", "bon jovi",
                 "aerosmith", "nirvana", "pearl jam", "soundgarden", "alice in chains",
                 "linkin park", "slipknot", "system of a down", "rammstein", "foo fighters",
-                "red hot chili peppers", "green day", "blink-182", "offspring", "kiss",
+                "red hot chili peppers", "green day", "blink-182", "offspring", "banda kiss", "kiss band",
                 "judas priest", "megadeth", "slayer", "pantera", "motörhead", "motorhead",
                 "sepultura", "angra", "shaman", "legião urbana", "capital inicial", "titãs",
                 "charlie brown jr", "cazuza", "barão vermelho", "paralamas", "engenheiros do hawaii",
                 "skank", "pitty", "cpm 22", "raimundos", "detonautas", "ira!", "biquini cavadão",
-                "rock", "metal"
+                "rock clássico", "rock nacional"
             ]
         ),
         (
@@ -97,8 +102,8 @@ def classify_media_genre(info: Dict[str, Any]) -> str:
                 "ze neto e cristiano", "maiara e maraisa", "luan santana", "ana castela",
                 "hugo e guilherme", "matheus e kauan", "guilherme e benuto", "clayton e romário",
                 "israel e rodolffo", "diego e victor hugo", "chitãozinho e xororó", "chitaozinho",
-                "bruno e marrone", "zeze di camargo", "zezÃ© di camargo", "leandro e leonardo",
-                "leonardo", "eduardo costa", "joão mineiro", "tião carreiro", "tiao carreiro",
+                "bruno e marrone", "zeze di camargo", "leandro e leonardo", "leandro & leonardo",
+                "cantor leonardo", "eduardo costa", "joão mineiro", "tião carreiro", "tiao carreiro",
                 "simone mendes", "lauana prado", "murilo huff", "felipe araújo", "trio parada dura"
             ]
         ),
@@ -279,8 +284,9 @@ def classify_media_genre(info: Dict[str, Any]) -> str:
 
     for genre_name, keywords in GENRE_RULES:
         for kw in keywords:
-            pattern = rf"\b{re.escape(kw)}\b"
-            if re.search(pattern, combined_text):
+            # (?<!\w) e (?!\w) garantem limites de palavra mesmo com símbolos como ' ou ! (M2)
+            pattern = rf"(?<!\w){re.escape(kw)}(?!\w)"
+            if re.search(pattern, primary_text):
                 return sanitize_folder_name(genre_name)
 
     # 3. Categorias padrão da plataforma
@@ -305,19 +311,13 @@ def classify_media_genre(info: Dict[str, Any]) -> str:
     return "Geral"
 
 def get_base_ydl_opts(extra_opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Retorna opções base do yt-dlp com bypass de bot (player_client) e cookies de navegador opcionais."""
+    """Retorna opções base do yt-dlp sem cap de qualidade e com cookies de navegador opcionais."""
     settings = load_settings()
     browser_cookies = settings.get("browser_cookies", "none")
 
     opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
-        "nocheckcertificate": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "ios", "web_creator", "mweb"]
-            }
-        }
     }
 
     if browser_cookies and browser_cookies != "none":
@@ -335,14 +335,16 @@ class MediaInspector:
 
     @staticmethod
     def inspect(url: str) -> Dict[str, Any]:
-        # Verifica se o link contém parâmetro de playlist (ex: watch?v=...&list=PL... ou /playlist?list=PL...)
+        # Verifica se o link contém parâmetro de playlist ou é canal/aba de vídeos
         import urllib.parse
         parsed = urllib.parse.urlparse(url)
         query = urllib.parse.parse_qs(parsed.query)
         list_param = query.get("list", [None])[0]
 
         target_url = url
-        is_playlist_query = bool(list_param and list_param != "WL") or "playlist" in parsed.path
+        is_channel_or_playlist = bool(list_param and list_param != "WL") or "playlist" in parsed.path or any(
+            seg in parsed.path for seg in ["/@", "/channel/", "/c/", "/user/"]
+        )
 
         # Se for um link de vídeo dentro de uma playlist, prioriza a extração da playlist completa
         if list_param and list_param != "WL" and "playlist" not in parsed.path:
@@ -350,8 +352,8 @@ class MediaInspector:
 
         ydl_opts = get_base_ydl_opts({
             "skip_download": True,
-            "extract_flat": True if is_playlist_query else False,
-            "noplaylist": False if is_playlist_query else True,
+            "extract_flat": True if is_channel_or_playlist else False,
+            "noplaylist": False if is_channel_or_playlist else True,
         })
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -369,14 +371,26 @@ class MediaInspector:
         if not info:
             raise ValueError("Nenhuma informação encontrada para este link.")
 
+        # Rejeitar transmissões ao vivo em andamento
+        if info.get("is_live") or info.get("live_status") == "is_live":
+            raise ValueError("Transmissões ao vivo (live streams) em andamento não podem ser baixadas.")
+
         is_playlist = info.get("_type") == "playlist" or "entries" in info
 
         if is_playlist:
             raw_entries = info.get("entries") or []
+            if not isinstance(raw_entries, list):
+                raw_entries = list(raw_entries)
+
             formatted_entries = []
             for idx, e in enumerate(raw_entries):
                 if not e:
                     continue
+                entry_title = e.get("title") or ""
+                # Filtrar vídeos excluídos, privados ou indisponíveis
+                if entry_title in ("[Private video]", "[Deleted video]") or e.get("availability") in ("private", "needs_auth"):
+                    continue
+
                 entry_id = e.get("id")
                 entry_url = e.get("url") or (f"https://www.youtube.com/watch?v={entry_id}" if entry_id else "")
                 entry_thumb = e.get("thumbnail")
@@ -384,9 +398,9 @@ class MediaInspector:
                     entry_thumb = f"https://i.ytimg.com/vi/{entry_id}/hqdefault.jpg"
 
                 formatted_entries.append({
-                    "index": idx + 1,
+                    "index": len(formatted_entries) + 1,
                     "id": entry_id,
-                    "title": e.get("title") or f"Vídeo #{idx + 1}",
+                    "title": entry_title or f"Vídeo #{len(formatted_entries) + 1}",
                     "uploader": e.get("uploader") or info.get("uploader") or info.get("channel") or "YouTube",
                     "duration": e.get("duration", 0),
                     "duration_formatted": format_seconds(e.get("duration", 0)),
@@ -513,6 +527,7 @@ class DownloadTask:
         format_note: str,
         options: Dict[str, Any],
         broadcast_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+        manager: Optional["DownloadManager"] = None,
     ):
         self.task_id = task_id
         self.url = url
@@ -522,15 +537,36 @@ class DownloadTask:
         self.format_note = format_note
         self.options = options
         self.broadcast_callback = broadcast_callback
+        self.manager = manager
         self.cancel_requested = False
-        self.final_filepath = None
-        self.final_size = 0
+        self.final_filepath: Optional[str] = None
+        self.final_size: int = 0
         self.thread: Optional[threading.Thread] = None
         self.last_db_time: float = 0.0
+        self.last_broadcast_time: float = 0.0
+        self.current_progress: float = 0.0
+        self.status: str = "pending"
         self.semaphore: Optional[threading.Semaphore] = None
+        self.target_dir: Optional[str] = None
 
     def cancel(self):
         self.cancel_requested = True
+        if self.target_dir:
+            self._cleanup_temp_files(self.target_dir)
+
+    def _cleanup_temp_files(self, directory: str):
+        """Remove arquivos temporários .part ou .ytdl deixados por download cancelado."""
+        try:
+            if not directory or not os.path.exists(directory):
+                return
+            for fname in os.listdir(directory):
+                if fname.endswith((".part", ".ytdl")) and (self.task_id[:8] in fname or (self.title and self.title[:20] in fname)):
+                    try:
+                        os.remove(os.path.join(directory, fname))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def _progress_hook(self, d: Dict[str, Any]):
         if self.cancel_requested:
@@ -547,17 +583,22 @@ class DownloadTask:
             if total > 0:
                 percent = round((downloaded / total) * 100, 1)
 
+            # Evita recuo abrupto de progresso caso o áudio DASH esteja sendo baixado após o vídeo
+            if percent > self.current_progress or self.current_progress >= 99.0:
+                self.current_progress = percent
+
             speed_str = f"{format_bytes(speed)}/s" if speed else ""
             eta_str = format_seconds(eta) if eta else ""
 
             self._update_state(
                 status="downloading",
-                progress=percent,
+                progress=self.current_progress,
                 speed=speed_str,
                 eta=eta_str,
                 file_size=total or downloaded,
             )
         elif status == "finished":
+            # Transição suave para processamento/multiplexação
             self._update_state(
                 status="processing",
                 progress=99.0,
@@ -578,6 +619,11 @@ class DownloadTask:
                 speed=f"FFmpeg ({pp})...",
                 eta="Processando",
             )
+        elif status == "finished":
+            # Captura caminho pós-processado se fornecido
+            info = d.get("info_dict")
+            if info and "filepath" in info:
+                self.final_filepath = info["filepath"]
 
     def _update_state(
         self,
@@ -588,8 +634,13 @@ class DownloadTask:
         file_size: int = 0,
         error_message: Optional[str] = None,
     ):
-        # 1. Notifica imediatamente o cliente Web via WebSocket
-        if self.broadcast_callback:
+        self.status = status
+        now = time.time()
+        is_state_transition = status in ["completed", "cancelled", "error", "processing", "pending"]
+
+        # Throttle WebSocket (B7): no máximo 1 broadcast a cada 250ms por tarefa, salvo em transições de estado
+        if self.broadcast_callback and (is_state_transition or (now - self.last_broadcast_time >= 0.25)):
+            self.last_broadcast_time = now
             payload = {
                 "type": "progress",
                 "id": self.task_id,
@@ -602,11 +653,12 @@ class DownloadTask:
                 "file_path": self.final_filepath,
                 "error_message": error_message,
             }
-            self.broadcast_callback(payload)
+            try:
+                self.broadcast_callback(payload)
+            except Exception as e:
+                logger.warning(f"Erro no broadcast callback: {e}")
 
-        # 2. Atualiza o banco SQLite de forma controlada (apenas em eventos de estado ou a cada 1.5s)
-        now = time.time()
-        is_state_transition = status in ["completed", "cancelled", "error", "processing", "pending"]
+        # Atualiza o banco SQLite de forma controlada
         if is_state_transition or (now - self.last_db_time >= 1.5):
             self.last_db_time = now
             try:
@@ -638,128 +690,154 @@ class DownloadTask:
 
     def run(self):
         """Executa a tarefa respeitando o limite de concorrência da fila semafórica."""
-        if self.semaphore:
-            self._update_state(status="pending", progress=0.0, speed="Aguardando vez na fila...", eta="--:--")
-            with self.semaphore:
-                if self.cancel_requested:
-                    self._update_state(status="cancelled", progress=0.0, speed="Cancelado", eta="")
-                    return
+        try:
+            if self.cancel_requested:
+                self._update_state(status="cancelled", progress=0.0, speed="Cancelado", eta="")
+                return
+
+            if self.semaphore:
+                self._update_state(status="pending", progress=0.0, speed="Aguardando vez na fila...", eta="--:--")
+                with self.semaphore:
+                    if self.cancel_requested:
+                        self._update_state(status="cancelled", progress=0.0, speed="Cancelado", eta="")
+                        return
+                    self._execute_download()
+            else:
                 self._execute_download()
-        else:
-            self._execute_download()
+        finally:
+            if self.manager:
+                self.manager.on_task_finished(self.task_id)
 
     def _execute_download(self):
-        settings = load_settings()
-        dest_dir = self.options.get("dest_dir") or settings.get("download_dir")
-        organize_by_genre = self.options.get("organize_by_genre", settings.get("organize_by_genre", False))
+        try:
+            settings = load_settings()
+            dest_dir = self.options.get("dest_dir") or settings.get("download_dir") or DEFAULT_DOWNLOAD_DIR
+            dest_dir = os.path.normpath(dest_dir)
+            self.target_dir = dest_dir
 
-        if organize_by_genre:
-            try:
-                inspect_opts = get_base_ydl_opts({"skip_download": True})
-                with yt_dlp.YoutubeDL(inspect_opts) as meta_ydl:
-                    meta_info = meta_ydl.extract_info(self.url, download=False)
-                    if meta_info:
-                        genre = classify_media_genre(meta_info)
-                        dest_dir = os.path.join(dest_dir, genre)
-                        logger.info(f"Mídia '{self.title}' classificada no gênero/pasta: [{genre}]")
-            except Exception as e:
-                logger.warning(f"Não foi possível classificar gênero previamente ({self.task_id[:8]}): {e}")
+            organize_by_genre = self.options.get("organize_by_genre", settings.get("organize_by_genre", False))
 
-        os.makedirs(dest_dir, exist_ok=True)
+            if organize_by_genre:
+                try:
+                    inspect_opts = get_base_ydl_opts({"skip_download": True})
+                    with yt_dlp.YoutubeDL(inspect_opts) as meta_ydl:
+                        meta_info = meta_ydl.extract_info(self.url, download=False)
+                        if meta_info:
+                            genre = classify_media_genre(meta_info)
+                            dest_dir = os.path.join(dest_dir, genre)
+                            self.target_dir = dest_dir
+                            logger.info(f"Mídia '{self.title}' classificada no gênero/pasta: [{genre}]")
+                except Exception as e:
+                    logger.warning(f"Não foi possível classificar gênero previamente ({self.task_id[:8]}): {e}")
 
-        outtmpl = os.path.join(dest_dir, "%(title)s.%(ext)s")
+            os.makedirs(dest_dir, exist_ok=True)
 
-        ydl_opts = get_base_ydl_opts({
-            "outtmpl": outtmpl,
-            "progress_hooks": [self._progress_hook],
-            "postprocessor_hooks": [self._postprocessor_hook],
-        })
+            # Prevenção de colisão de nomes com ID do vídeo (M5)
+            outtmpl = os.path.join(dest_dir, "%(title).150s [%(id)s].%(ext)s")
 
-        # Configuração do modo
-        if self.download_type == "audio":
-            audio_format = self.options.get("audio_format", "mp3")
-            audio_quality = self.options.get("audio_quality", "320")
+            ydl_opts = get_base_ydl_opts({
+                "outtmpl": outtmpl,
+                "progress_hooks": [self._progress_hook],
+                "postprocessor_hooks": [self._postprocessor_hook],
+            })
 
-            postprocessors = [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": audio_format,
-                    "preferredquality": audio_quality,
-                },
-                {"key": "FFmpegMetadata", "add_metadata": True},
-            ]
+            # Configuração do modo
+            if self.download_type == "audio":
+                audio_format = self.options.get("audio_format", "mp3")
+                audio_quality = self.options.get("audio_quality", "320")
 
-            # Incorporar thumbnail como capa de álbum para MP3 / M4A
-            if audio_format in ["mp3", "m4a"]:
-                ydl_opts["writethumbnail"] = True
-                postprocessors.append({"key": "EmbedThumbnail"})
+                postprocessors = [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": audio_format,
+                        "preferredquality": audio_quality,
+                    },
+                    {"key": "FFmpegMetadata", "add_metadata": True},
+                ]
 
-            ydl_opts.update(
-                {
-                    "format": "bestaudio/best",
-                    "postprocessors": postprocessors,
-                }
-            )
-        else:
-            # Modo Vídeo (Smart Selection de faixas DASH 4K/1080p/720p com multiplexação)
-            resolution = self.options.get("resolution", "1080")
-            container = self.options.get("container", "mp4")
-            embed_subs = self.options.get("embed_subtitles", True)
+                embed_cover = self.options.get("embed_cover", True)
+                if embed_cover and audio_format.lower() in ["mp3", "m4a", "flac"]:
+                    ydl_opts["writethumbnail"] = True
+                    postprocessors.append({"key": "EmbedThumbnail"})
 
-            # Formata regra de formato para melhor vídeo + melhor áudio
-            if resolution and resolution != "best":
-                format_rule = f"bestvideo[height<={resolution}]+bestaudio/best[height<={resolution}]/best"
-            else:
-                format_rule = "bestvideo+bestaudio/best"
-
-            postprocessors = [
-                {"key": "FFmpegMetadata", "add_metadata": True},
-            ]
-
-            # Inserção de capa no arquivo de vídeo se suportado
-            ydl_opts["writethumbnail"] = True
-            postprocessors.append({"key": "EmbedThumbnail"})
-
-            ydl_opts.update(
-                {
-                    "format": format_rule,
-                    "merge_output_format": container,
-                    "postprocessors": postprocessors,
-                }
-            )
-
-            if embed_subs:
                 ydl_opts.update(
                     {
-                        "writesubtitles": True,
-                        "writeautomaticsub": True,
-                        "subtitleslangs": ["pt", "en"],
+                        "format": "bestaudio/best",
+                        "postprocessors": postprocessors,
                     }
                 )
-                postprocessors.append({"key": "FFmpegEmbedSubtitle"})
+            else:
+                resolution = self.options.get("resolution", "1080")
+                container = self.options.get("container", "mp4").lower()
+                embed_subs = self.options.get("embed_subtitles", True)
+                subtitles_langs = self.options.get("subtitles_langs", settings.get("subtitles_langs", "pt,en"))
+                embed_cover = self.options.get("embed_cover", True)
 
-        self._update_state(status="downloading", progress=0.0, speed="Iniciando...", eta="--:--")
+                if resolution and resolution != "best":
+                    format_rule = f"bestvideo[height<={resolution}]+bestaudio/best[height<={resolution}]/best"
+                else:
+                    format_rule = "bestvideo+bestaudio/best"
 
-        try:
+                postprocessors = [
+                    {"key": "FFmpegMetadata", "add_metadata": True},
+                ]
+
+                supported_video_cover_containers = {"mp4", "mkv", "mov", "m4v"}
+                if embed_cover and container in supported_video_cover_containers:
+                    ydl_opts["writethumbnail"] = True
+                    postprocessors.append({"key": "EmbedThumbnail"})
+
+                ydl_opts.update(
+                    {
+                        "format": format_rule,
+                        "merge_output_format": container,
+                        "postprocessors": postprocessors,
+                    }
+                )
+
+                if embed_subs:
+                    langs_list = [lang.strip() for lang in subtitles_langs.split(",") if lang.strip()]
+                    ydl_opts.update(
+                        {
+                            "writesubtitles": True,
+                            "writeautomaticsub": True,
+                            "subtitleslangs": langs_list or ["pt", "en"],
+                        }
+                    )
+                    postprocessors.append({"key": "FFmpegEmbedSubtitle"})
+
+            self._update_state(status="downloading", progress=0.0, speed="Iniciando...", eta="--:--")
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(self.url, download=True)
                 if not info:
                     raise Exception("Falha ao baixar mídia.")
 
-                # Determina o arquivo final gerado
-                filename = ydl.prepare_filename(info)
-                if self.download_type == "audio":
-                    audio_fmt = self.options.get("audio_format", "mp3")
-                    base, _ = os.path.splitext(filename)
-                    filename = f"{base}.{audio_fmt}"
-                else:
-                    container = self.options.get("container", "mp4")
-                    base, _ = os.path.splitext(filename)
-                    filename = f"{base}.{container}"
+                # Determina o arquivo final gerado com precisão (M4)
+                real_filepath = None
+                if "requested_downloads" in info and info["requested_downloads"]:
+                    for req in info["requested_downloads"]:
+                        fp = req.get("filepath")
+                        if fp and os.path.exists(fp):
+                            real_filepath = fp
+                            break
 
-                self.final_filepath = filename
-                if os.path.exists(filename):
-                    self.final_size = os.path.getsize(filename)
+                if not real_filepath:
+                    # Fallback via prepare_filename
+                    prep = ydl.prepare_filename(info)
+                    base, _ = os.path.splitext(prep)
+                    ext = self.options.get("audio_format", "mp3") if self.download_type == "audio" else self.options.get("container", "mp4")
+                    candidate = f"{base}.{ext}"
+                    if os.path.exists(candidate):
+                        real_filepath = candidate
+                    elif os.path.exists(prep):
+                        real_filepath = prep
+
+                if real_filepath and os.path.exists(real_filepath):
+                    self.final_filepath = os.path.normpath(real_filepath)
+                    self.final_size = os.path.getsize(self.final_filepath)
+                else:
+                    raise Exception("O arquivo não foi localizado no disco após a conclusão do download.")
 
                 self._update_state(
                     status="completed",
@@ -768,11 +846,13 @@ class DownloadTask:
                     eta="00:00",
                     file_size=self.final_size,
                 )
-                logger.info(f"Download {self.task_id} finalizado com sucesso: {filename}")
+                logger.info(f"Download {self.task_id} finalizado com sucesso: {self.final_filepath}")
 
         except Exception as e:
             if self.cancel_requested:
                 logger.info(f"Download {self.task_id} cancelado pelo usuário.")
+                if self.target_dir:
+                    self._cleanup_temp_files(self.target_dir)
                 self._update_state(status="cancelled", progress=0.0, speed="Cancelado", eta="")
             else:
                 err_msg = str(e)
@@ -793,9 +873,33 @@ class DownloadManager:
         self.active_tasks: Dict[str, DownloadTask] = {}
         self.broadcast_callback: Optional[Callable[[Dict[str, Any]], None]] = None
         self.semaphore = threading.Semaphore(max_concurrent_downloads)
+        self._lock = threading.Lock()
 
     def set_broadcast_callback(self, callback: Callable[[Dict[str, Any]], None]):
         self.broadcast_callback = callback
+
+    def on_task_finished(self, task_id: str):
+        """Remove a tarefa concluída/falhada da memória para evitar vazamento (M8)."""
+        with self._lock:
+            self.active_tasks.pop(task_id, None)
+
+    def get_active_tasks_summary(self) -> List[Dict[str, Any]]:
+        """Retorna resumo das tarefas atualmente ativas para ressincronização no frontend (A7)."""
+        with self._lock:
+            tasks = list(self.active_tasks.values())
+        return [
+            {
+                "id": t.task_id,
+                "url": t.url,
+                "title": t.title,
+                "thumbnail": t.thumbnail,
+                "type": t.download_type,
+                "format_note": t.format_note,
+                "status": t.status,
+                "progress": t.current_progress,
+            }
+            for t in tasks
+        ]
 
     def create_download(
         self,
@@ -829,10 +933,12 @@ class DownloadManager:
             format_note=format_note,
             options=options,
             broadcast_callback=self.broadcast_callback,
+            manager=self,
         )
         task.semaphore = self.semaphore
 
-        self.active_tasks[task_id] = task
+        with self._lock:
+            self.active_tasks[task_id] = task
 
         thread = threading.Thread(target=task.run, daemon=True, name=f"Downloader-{task_id[:8]}")
         task.thread = thread
@@ -841,7 +947,8 @@ class DownloadManager:
         return task_id
 
     def cancel_download(self, task_id: str) -> bool:
-        task = self.active_tasks.get(task_id)
+        with self._lock:
+            task = self.active_tasks.get(task_id)
         if task:
             task.cancel()
             return True
@@ -849,8 +956,9 @@ class DownloadManager:
 
     def cancel_all_downloads(self) -> int:
         """Cancela todos os downloads ativos e enfileirados de uma só vez."""
+        with self._lock:
+            tasks = list(self.active_tasks.values())
         count = 0
-        tasks = list(self.active_tasks.values())
         for task in tasks:
             try:
                 task.cancel()
@@ -859,12 +967,16 @@ class DownloadManager:
                 logger.warning(f"Erro ao cancelar tarefa {task.task_id}: {e}")
         return count
 
-    def get_all_downloads(self) -> List[Dict[str, Any]]:
-        with get_db_connection() as conn:
-            rows = conn.execute("SELECT * FROM downloads ORDER BY created_at DESC").fetchall()
-            return [dict(r) for r in rows]
+    def get_all_downloads(self, limit: int = 500) -> List[Dict[str, Any]]:
+        return db_get_all_downloads(limit=limit)
 
     def delete_download(self, task_id: str, delete_file: bool = False) -> bool:
+        # Cancela tarefa se ainda estiver ativa (A6)
+        with self._lock:
+            task = self.active_tasks.get(task_id)
+        if task:
+            task.cancel()
+
         with get_db_connection() as conn:
             row = conn.execute("SELECT file_path FROM downloads WHERE id = ?", (task_id,)).fetchone()
             if row and delete_file and row["file_path"]:
@@ -876,8 +988,8 @@ class DownloadManager:
 
         execute_write("DELETE FROM downloads WHERE id = ?", (task_id,))
 
-        if task_id in self.active_tasks:
-            del self.active_tasks[task_id]
+        with self._lock:
+            self.active_tasks.pop(task_id, None)
         return True
 
 
