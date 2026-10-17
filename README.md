@@ -40,8 +40,9 @@ Projetado para operar por meio de uma **interface Web moderna com tema escuro pr
 | 🏷️ **Organização Inteligente por Gêneros** | Identifica automaticamente o gênero musical da banda/faixa ou o tema do vídeo (Rock, Sertanejo, Pagode, Pop, Eletrônica, Podcasts, Games, etc.) e cria subpastas categorizadas automaticamente. |
 | 🗂️ **Seletor de Pasta Direto na Análise** | Escolha a pasta de salvamento diretamente na tela de seleção de formato/resolução ou no modal de playlist com 1 clique no botão "📁 Procurar...". |
 | 🚦 **Fila Semafórica Anti-Travamento** | Gerencia até 3 downloads simultâneos em paralelo com fila automática, evitando bloqueios de IP (HTTP 429), consumo excessivo de banda e travamentos de disco. |
-| 📜 **Rolagem Interna & Limite de Exibição** | A Biblioteca possui barra de rolagem dedicada no canto e limite de visualização com "Exibir mais", permitindo rolar os downloads sem precisar rolar a página inteira. |
-| 🧹 **Botão Limpar Biblioteca** | Limpe e esvazie completamente a lista de downloads com 1 clique. |
+| 🛑 **Cancelar Todos em 1 Clique** | Cancele instantaneamente todos os downloads ativos e da fila com um único clique no botão "Cancelar Todos". |
+| 📜 **Rolagem Interna & Limite de Exibição** | A Biblioteca e os Downloads Ativos possuem barra de rolagem dedicada no canto e limite de visualização com "Exibir mais", permitindo rolar as tarefas sem precisar rolar a página inteira. |
+| 🧹 **Botão Limpar Biblioteca** | Limpe e esvazie completamente a lista de downloads concluídos com 1 clique. |
 | 🔇 **Inicialização 100% Oculta** | Inicie pelo `iniciar.bat` ou `iniciar.vbs` de forma invisível sem janelas pretas de console abertas. O navegador abre automaticamente. |
 | 🛑 **Auto-Encerramento Inteligente** | Ao fechar a página do sistema no navegador, o servidor Python é finalizado automaticamente em segundo plano, liberando a porta e evitando conflitos. |
 | 🗄️ **Banco de Dados SQLite (WAL Mode)** | Histórico permanente com filtros (Todos, Vídeos, Áudios, Concluídos) e busca rápida. O modo WAL garante que o banco nunca trave sob alta concorrência. |

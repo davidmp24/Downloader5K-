@@ -260,6 +260,11 @@ async def smart_download(payload: Dict[str, str] = Body(...)):
 async def get_downloads():
     return download_manager.get_all_downloads()
 
+@app.post("/api/downloads/cancel-all")
+async def cancel_all_downloads():
+    cancelled_count = download_manager.cancel_all_downloads()
+    return {"status": "cancelled", "count": cancelled_count}
+
 @app.post("/api/downloads/{task_id}/cancel")
 async def cancel_download(task_id: str):
     success = download_manager.cancel_download(task_id)

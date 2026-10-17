@@ -14,6 +14,7 @@ class DownloaderApp {
         this.selectedPlaylistEntries = new Set();
         this.playlistTab = 'video';
         this.historyDisplayLimit = 30;
+        this.activeDisplayLimit = 30;
         this.duplicateEntriesIndices = new Set();
         this.ws = null;
         this.wsReconnectTimer = null;
@@ -115,6 +116,7 @@ class DownloaderApp {
         this.activeDownloadsList = document.getElementById('activeDownloadsList');
         this.emptyActiveState = document.getElementById('emptyActiveState');
         this.activeCounter = document.getElementById('activeCounter');
+        this.btnCancelAllDownloads = document.getElementById('btnCancelAllDownloads');
 
         this.historyList = document.getElementById('historyList');
         this.emptyHistoryState = document.getElementById('emptyHistoryState');
@@ -237,6 +239,11 @@ class DownloaderApp {
         // Botão Limpar Histórico / Biblioteca
         if (this.btnClearHistory) {
             this.btnClearHistory.addEventListener('click', () => this.clearHistory());
+        }
+
+        // Botão Cancelar Todos os Downloads Ativos
+        if (this.btnCancelAllDownloads) {
+            this.btnCancelAllDownloads.addEventListener('click', () => this.cancelAllDownloads());
         }
 
         // Notificação de encerramento do backend ao fechar ou descarregar a aba do navegador
@@ -650,6 +657,16 @@ class DownloaderApp {
     // ==========================================
     // Modal e Seleção de Playlist com Detecção de Duplicatas
     // ==========================================
+    escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
     normalizeTitle(title) {
         if (!title) return '';
         return title
@@ -685,8 +702,11 @@ class DownloaderApp {
         this.selectedPlaylistEntries = new Set();
 
         this.playlistItemsList.innerHTML = '';
+        this.playlistItemsList.scrollTop = 0;
         entries.forEach((entry, idx) => {
-            const normTitle = this.normalizeTitle(entry.title);
+            const rawTitle = entry.title || `Vídeo #${idx + 1}`;
+            const safeTitle = this.escapeHtml(rawTitle);
+            const normTitle = this.normalizeTitle(rawTitle);
             let isDuplicate = false;
             let duplicateReason = '';
 
@@ -722,8 +742,8 @@ class DownloaderApp {
                     <img src="${entry.thumbnail || 'https://placehold.co/70x40/141824/64748b?text=Thumb'}" alt="Thumb" onerror="this.src='https://placehold.co/70x40/141824/64748b?text=Thumb'"/>
                 </div>
                 <div class="playlist-item-info">
-                    <h5 class="playlist-item-title" title="${entry.title}">
-                        ${entry.title}
+                    <h5 class="playlist-item-title" title="${safeTitle}">
+                        ${safeTitle}
                         ${isDuplicate ? `<span class="duplicate-tag" title="Vídeo duplicado (${duplicateReason}) desmarcado automaticamente para evitar repetição">⚠️ Duplicado (Desmarcado)</span>` : ''}
                     </h5>
                 </div>
@@ -996,6 +1016,10 @@ class DownloaderApp {
         this.activeCounter.textContent = count;
         this.emptyActiveState.classList.toggle('hidden', count > 0);
 
+        if (this.btnCancelAllDownloads) {
+            this.btnCancelAllDownloads.classList.toggle('hidden', count === 0);
+        }
+
         // Remove cards órfãos
         const existingCardIds = new Set(Array.from(this.activeDownloadsList.querySelectorAll('.download-card')).map(c => c.id.replace('card-', '')));
         for (let id of existingCardIds) {
@@ -1005,21 +1029,49 @@ class DownloaderApp {
             }
         }
 
-        // Renderiza ou atualiza cards
-        this.activeDownloads.forEach(task => {
+        this.activeDownloadsList.querySelectorAll('.btn-load-more').forEach(el => el.remove());
+
+        if (count === 0) return;
+
+        const allTasks = Array.from(this.activeDownloads.values());
+        const displayedTasks = allTasks.slice(0, this.activeDisplayLimit);
+
+        // Renderiza ou atualiza cards limitados ao activeDisplayLimit
+        displayedTasks.forEach(task => {
             let card = document.getElementById(`card-${task.id}`);
             if (!card) {
                 card = this.createActiveCardElement(task);
-                this.activeDownloadsList.prepend(card);
+                this.activeDownloadsList.appendChild(card);
             }
             this.updateActiveCardUI(task);
         });
+
+        // Botão Carregar Mais se houver mais itens que o limite
+        if (count > this.activeDisplayLimit) {
+            const loadMoreBtn = document.createElement('button');
+            loadMoreBtn.className = 'btn-load-more';
+            const remaining = count - this.activeDisplayLimit;
+            loadMoreBtn.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+                Exibir mais (${remaining} downloads restantes)
+            `;
+            loadMoreBtn.addEventListener('click', () => {
+                this.activeDisplayLimit += 30;
+                this.renderActiveDownloads();
+            });
+            this.activeDownloadsList.appendChild(loadMoreBtn);
+        }
     }
 
     createActiveCardElement(task) {
         const card = document.createElement('div');
         card.className = 'download-card';
         card.id = `card-${task.id}`;
+
+        const safeTitle = this.escapeHtml(task.title || 'Vídeo sem título');
+        const safeAuthor = this.escapeHtml(task.author || 'YouTube');
 
         card.innerHTML = `
             <div class="card-thumb">
@@ -1028,10 +1080,10 @@ class DownloaderApp {
             </div>
             <div class="card-info">
                 <div class="card-title-row">
-                    <h4 class="card-title" title="${task.title}">${task.title}</h4>
+                    <h4 class="card-title" title="${safeTitle}">${safeTitle}</h4>
                     <span class="card-format-badge">${task.format_note || task.type.toUpperCase()}</span>
                 </div>
-                <p class="card-author">${task.author || 'YouTube'}</p>
+                <p class="card-author">${safeAuthor}</p>
                 <div class="progress-bar-container">
                     <div class="progress-bar-fill" id="fill-${task.id}" style="width: ${task.progress || 0}%"></div>
                 </div>
@@ -1073,6 +1125,33 @@ class DownloaderApp {
             this.showToast('Cancelamento solicitado.', 'info');
         } catch (e) {
             this.showToast('Erro ao cancelar download.', 'error');
+        }
+    }
+
+    async cancelAllDownloads() {
+        if (!this.activeDownloads || this.activeDownloads.size === 0) {
+            this.showToast('Não há downloads ativos para cancelar.', 'info');
+            return;
+        }
+
+        if (!confirm(`Deseja realmente cancelar todos os ${this.activeDownloads.size} downloads em andamento e na fila?`)) {
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/downloads/cancel-all', { method: 'POST' });
+            if (res.ok) {
+                const data = await res.json();
+                this.activeDownloads.clear();
+                this.renderActiveDownloads();
+                this.showToast(`Todos os downloads foram cancelados (${data.count} cancelado(s)).`, 'info');
+                await this.loadHistory();
+            } else {
+                const err = await res.json();
+                throw new Error(err.detail || 'Erro ao cancelar downloads.');
+            }
+        } catch (err) {
+            this.showToast(err.message, 'error');
         }
     }
 

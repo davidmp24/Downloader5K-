@@ -342,14 +342,16 @@ class MediaInspector:
         list_param = query.get("list", [None])[0]
 
         target_url = url
+        is_playlist_query = bool(list_param and list_param != "WL") or "playlist" in parsed.path
+
         # Se for um link de vídeo dentro de uma playlist, prioriza a extração da playlist completa
         if list_param and list_param != "WL" and "playlist" not in parsed.path:
             target_url = f"https://www.youtube.com/playlist?list={list_param}"
 
         ydl_opts = get_base_ydl_opts({
             "skip_download": True,
-            "extract_flat": True,
-            "noplaylist": False,
+            "extract_flat": True if is_playlist_query else False,
+            "noplaylist": False if is_playlist_query else True,
         })
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -844,6 +846,18 @@ class DownloadManager:
             task.cancel()
             return True
         return False
+
+    def cancel_all_downloads(self) -> int:
+        """Cancela todos os downloads ativos e enfileirados de uma só vez."""
+        count = 0
+        tasks = list(self.active_tasks.values())
+        for task in tasks:
+            try:
+                task.cancel()
+                count += 1
+            except Exception as e:
+                logger.warning(f"Erro ao cancelar tarefa {task.task_id}: {e}")
+        return count
 
     def get_all_downloads(self) -> List[Dict[str, Any]]:
         with get_db_connection() as conn:
