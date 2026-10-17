@@ -687,6 +687,26 @@ class DownloaderApp {
 
         // Configuração inicial de aba
         this.switchInspectorTab('video');
+
+        // Verificação se o vídeo já consta no histórico de downloads
+        let alreadyInHistory = false;
+        if (Array.isArray(this.history) && this.history.length > 0) {
+            const inspectedNorm = this.normalizeTitle(data.title);
+            for (const h of this.history) {
+                if (data.id && h.url && h.url.includes(data.id)) {
+                    alreadyInHistory = true;
+                    break;
+                }
+                if (inspectedNorm && this.normalizeTitle(h.title) === inspectedNorm) {
+                    alreadyInHistory = true;
+                    break;
+                }
+            }
+        }
+        if (alreadyInHistory) {
+            this.showToast('Aviso: Este arquivo já consta no seu Histórico de downloads.', 'warning');
+        }
+
         this.inspectorModal.classList.remove('hidden');
     }
 
@@ -738,13 +758,21 @@ class DownloaderApp {
 
     normalizeTitle(title) {
         if (!title) return '';
-        return title
+        let clean = title
             .normalize("NFD")
             .replace(/[\u0300-\u036f]/g, "")
-            .toLowerCase()
+            .toLowerCase();
+
+        // Remove sufixos e marcadores de vídeo comuns no YouTube para agrupar títulos equivalentes
+        clean = clean
+            .replace(/\[\s*(?:official\s*(?:music\s*)?video|video\s*oficial|clipe\s*oficial|audio\s*oficial|official\s*audio|visualizer|letra|lyric\s*video|legendado|ao\s*vivo|live|hd|4k|1080p|remaster(?:izado|ed)?)\s*\]/gi, ' ')
+            .replace(/\(\s*(?:official\s*(?:music\s*)?video|video\s*oficial|clipe\s*oficial|audio\s*oficial|official\s*audio|visualizer|letra|lyric\s*video|legendado|ao\s*vivo|live|hd|4k|1080p|remaster(?:izado|ed)?)\s*\)/gi, ' ')
+            .replace(/(?:\|\s*|[-–—]\s*)(?:official\s*(?:music\s*)?video|video\s*oficial|clipe\s*oficial|audio\s*oficial|official\s*audio|visualizer|letra|lyric\s*video|legendado|ao\s*vivo|live|hd|4k|1080p|remaster(?:izado|ed)?)/gi, ' ')
             .replace(/[\(\)\[\]\{\}\-_,.:;!?|/\\~`"'^]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
+
+        return clean;
     }
 
     openPlaylistModal(playlistData) {
@@ -765,6 +793,25 @@ class DownloaderApp {
             this.checkPlaylistOrganizeGenre.checked = (this.settings.organize_by_genre !== false);
         }
 
+        // Prepara histórico existente para detectar arquivos já baixados
+        const historyIds = new Set();
+        const historyTitles = new Map();
+        if (Array.isArray(this.history)) {
+            this.history.forEach(item => {
+                if (item.url) {
+                    const match = item.url.match(/(?:v=|youtu\.be\/|\/embed\/|\/v\/|shorts\/)([a-zA-Z0-9_-]{11})/);
+                    if (match) historyIds.add(match[1]);
+                }
+                if (item.id && typeof item.id === 'string' && /^[a-zA-Z0-9_-]{11}$/.test(item.id)) {
+                    historyIds.add(item.id);
+                }
+                if (item.title) {
+                    const nTitle = this.normalizeTitle(item.title);
+                    if (nTitle) historyTitles.set(nTitle, item.title);
+                }
+            });
+        }
+
         // Lógica de Detecção Inteligente de Vídeos Duplicados
         const seenTitles = new Map();
         const seenIds = new Set();
@@ -781,9 +828,15 @@ class DownloaderApp {
             let isDuplicate = false;
             let duplicateReason = '';
 
-            if (entry.id && seenIds.has(entry.id)) {
+            if (entry.id && historyIds.has(entry.id)) {
                 isDuplicate = true;
-                duplicateReason = 'mesmo ID';
+                duplicateReason = 'já baixado no histórico';
+            } else if (normTitle && historyTitles.has(normTitle)) {
+                isDuplicate = true;
+                duplicateReason = 'já baixado no histórico';
+            } else if (entry.id && seenIds.has(entry.id)) {
+                isDuplicate = true;
+                duplicateReason = 'mesmo ID na playlist';
             } else if (normTitle && seenTitles.has(normTitle)) {
                 isDuplicate = true;
                 const firstIdx = seenTitles.get(normTitle);
@@ -815,7 +868,7 @@ class DownloaderApp {
                 <div class="playlist-item-info">
                     <h5 class="playlist-item-title" title="${safeTitle}">
                         ${safeTitle}
-                        ${isDuplicate ? `<span class="duplicate-tag" title="Vídeo duplicado (${duplicateReason}) desmarcado automaticamente para evitar repetição">⚠️ Duplicado (Desmarcado)</span>` : ''}
+                        ${isDuplicate ? `<span class="duplicate-tag" title="Vídeo duplicado (${duplicateReason}) desmarcado automaticamente para evitar repetição">⚠️ Repetido (${duplicateReason})</span>` : ''}
                     </h5>
                 </div>
                 <span class="playlist-item-duration">${entry.duration_formatted || '--:--'}</span>
@@ -840,9 +893,9 @@ class DownloaderApp {
         // Exibe aviso na barra de ferramentas se houver duplicatas desmarcadas
         if (this.playlistDuplicatesNotice) {
             if (duplicateCount > 0) {
-                this.playlistDuplicatesNotice.textContent = `⚠️ ${duplicateCount} duplicado(s) desmarcado(s)`;
+                this.playlistDuplicatesNotice.textContent = `⚠️ ${duplicateCount} repetido(s) desmarcado(s)`;
                 this.playlistDuplicatesNotice.classList.remove('hidden');
-                this.showToast(`${duplicateCount} vídeo(s) com o mesmo nome foram desmarcados automaticamente.`, 'info');
+                this.showToast(`${duplicateCount} arquivo(s) duplicados ou já presentes no Histórico foram desmarcados automaticamente.`, 'info');
             } else {
                 this.playlistDuplicatesNotice.classList.add('hidden');
             }

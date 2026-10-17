@@ -311,13 +311,18 @@ def classify_media_genre(info: Dict[str, Any]) -> str:
     return "Geral"
 
 def get_base_ydl_opts(extra_opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Retorna opções base do yt-dlp sem cap de qualidade e com cookies de navegador opcionais."""
+    """Retorna opções base do yt-dlp com suporte a múltiplos clientes para evitar bot detection e cookies opcionais."""
     settings = load_settings()
     browser_cookies = settings.get("browser_cookies", "none")
 
     opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "ios", "mweb", "web"]
+            }
+        }
     }
 
     if browser_cookies and browser_cookies != "none":
@@ -327,7 +332,17 @@ def get_base_ydl_opts(extra_opts: Optional[Dict[str, Any]] = None) -> Dict[str, 
             pass
 
     if extra_opts:
-        opts.update(extra_opts)
+        if "extractor_args" in extra_opts and "extractor_args" in opts:
+            merged_args = dict(opts["extractor_args"])
+            for k, v in extra_opts["extractor_args"].items():
+                if k in merged_args and isinstance(v, dict) and isinstance(merged_args[k], dict):
+                    merged_args[k] = {**merged_args[k], **v}
+                else:
+                    merged_args[k] = v
+            opts.update(extra_opts)
+            opts["extractor_args"] = merged_args
+        else:
+            opts.update(extra_opts)
     return opts
 
 class MediaInspector:
@@ -764,6 +779,11 @@ class DownloadTask:
                     {
                         "format": "bestaudio/best",
                         "postprocessors": postprocessors,
+                        "extractor_args": {
+                            "youtube": {
+                                "player_client": ["android", "ios", "mweb"]
+                            }
+                        },
                     }
                 )
             else:
@@ -792,6 +812,11 @@ class DownloadTask:
                         "format": format_rule,
                         "merge_output_format": container,
                         "postprocessors": postprocessors,
+                        "extractor_args": {
+                            "youtube": {
+                                "player_client": ["web", "mweb", "android", "ios"]
+                            }
+                        },
                     }
                 )
 
