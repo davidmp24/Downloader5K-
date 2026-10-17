@@ -163,15 +163,24 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket)
 
-@app.get("/api/inspect")
-async def inspect_url(url: str = Query(...)):
-    """Inspeciona URL e extrai títulos, durações e resoluções."""
-    if not url:
+@app.api_route("/api/inspect", methods=["GET", "POST"])
+async def inspect_url(
+    url: Optional[str] = Query(None),
+    payload: Optional[Dict[str, Any]] = Body(None)
+):
+    """Inspeciona URL e extrai títulos, durações e resoluções suportando tanto GET (?url=) quanto POST ({url: ...})."""
+    target_url = url
+    if not target_url and payload and isinstance(payload, dict):
+        target_url = payload.get("url")
+
+    if not target_url or not str(target_url).strip():
         raise HTTPException(status_code=400, detail="URL inválida ou vazia.")
+
+    target_url = str(target_url).strip()
 
     try:
         loop = asyncio.get_running_loop()
-        data = await loop.run_in_executor(None, MediaInspector.inspect, url)
+        data = await loop.run_in_executor(None, MediaInspector.inspect, target_url)
         settings = load_settings()
         data["smart_mode"] = settings.get("smart_mode", False)
         data["settings"] = settings
