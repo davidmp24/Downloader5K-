@@ -36,6 +36,9 @@ Projetado para operar por meio de uma **interface Web moderna com tema escuro pr
 | 📺 **Vídeos em Qualidade Máxima** | Suporte a **8K, 4K (2160p), 2K (1440p), Full HD (1080p a 60 FPS)** e 720p nos formatos **MP4**, **MKV** e **WebM**. |
 | 🎧 **Extração de Áudio de Estúdio** | Extração de áudio cristalino em **MP3 (até 320 kbps)**, M4A/AAC, FLAC Lossless, WAV e OPUS com **incorporação automática da thumbnail como capa do álbum** e metadados ID3. |
 | 📑 **Detecção Inteligente de Playlists** | Identifica links de playlists e vídeos individuais em playlists, abrindo um modal interativo para **selecionar vídeos específicos ou baixar todos em lote**. |
+| 🛡️ **Detecção & Desmarcação de Duplicados** | Reconhece automaticamente vídeos com o mesmo nome ou equivalentes na playlist, desmarca a repetição de forma inteligente e exibe o selo explicativo para evitar downloads duplicados. |
+| 🏷️ **Organização Inteligente por Gêneros** | Identifica automaticamente o gênero musical da banda/faixa ou o tema do vídeo (Rock, Sertanejo, Pagode, Pop, Eletrônica, Podcasts, Games, etc.) e cria subpastas categorizadas automaticamente. |
+| 🗂️ **Seletor de Pasta Direto na Análise** | Escolha a pasta de salvamento diretamente na tela de seleção de formato/resolução ou no modal de playlist com 1 clique no botão "📁 Procurar...". |
 | 🚦 **Fila Semafórica Anti-Travamento** | Gerencia até 3 downloads simultâneos em paralelo com fila automática, evitando bloqueios de IP (HTTP 429), consumo excessivo de banda e travamentos de disco. |
 | 📜 **Rolagem Interna & Limite de Exibição** | A Biblioteca possui barra de rolagem dedicada no canto e limite de visualização com "Exibir mais", permitindo rolar os downloads sem precisar rolar a página inteira. |
 | 🧹 **Botão Limpar Biblioteca** | Limpe e esvazie completamente a lista de downloads com 1 clique. |
@@ -43,7 +46,6 @@ Projetado para operar por meio de uma **interface Web moderna com tema escuro pr
 | 🛑 **Auto-Encerramento Inteligente** | Ao fechar a página do sistema no navegador, o servidor Python é finalizado automaticamente em segundo plano, liberando a porta e evitando conflitos. |
 | 🗄️ **Banco de Dados SQLite (WAL Mode)** | Histórico permanente com filtros (Todos, Vídeos, Áudios, Concluídos) e busca rápida. O modo WAL garante que o banco nunca trave sob alta concorrência. |
 | 📁 **Integração Total com Windows 10** | Botão **"📁 Abrir Pasta"** (revela e seleciona o arquivo diretamente no Windows Explorer) e botão **"▶ Reproduzir"** (abre no reprodutor padrão do sistema). |
-| 🗂️ **Seletor de Diretório Nativo** | Escolha graficamente onde deseja salvar seus arquivos usando a janela nativa do Windows através do botão "Procurar...". |
 | 🌐 **Bypass de Restrições (Cookies)** | Suporte opcional à importação de sessão do seu navegador (Edge, Chrome, Brave, Firefox) para baixar conteúdos privados ou com restrição de idade sem CAPTCHAs. |
 
 ---
@@ -127,32 +129,36 @@ O aplicativo estará disponível em:
 ### 1. Baixar Vídeo ou Áudio Avulso
 1. Copie o link de qualquer vídeo ou Shorts do YouTube.
 2. Na página do **Downloader 5K+**, clique no botão **"Colar Link"**.
-3. O sistema inspecionará as resoluções disponíveis.
-4. Escolha se deseja:
-   - **Aba Vídeo:** Selecione a resolução (4K, 1080p, 720p) e o container (MP4 ou MKV).
+3. O sistema inspecionará o conteúdo e exibirá a tela de escolha:
+   - **Aba Vídeo:** Selecione a resolução desejada (4K, 1080p, 720p) e o container (MP4 ou MKV).
    - **Aba Áudio:** Selecione o formato (MP3 320k, FLAC, M4A, WAV).
-5. Clique em **"Iniciar Download"**.
+   - **📁 Pasta de Salvamento:** Altere o caminho onde o arquivo será salvo clicando em **"Procurar..."** diretamente nesta tela.
+   - **🏷️ Organizar em pasta pelo gênero:** Deixe marcado para que o sistema identifique o gênero musical/tema e crie a pasta correspondente automaticamente.
+4. Clique em **"Iniciar Download"**.
 
-### 2. Baixar Playlists (Selecionar Vídeos ou Todos)
+### 2. Baixar Playlists (com Detecção de Duplicados e Escolha de Pasta)
 1. Copie o link de qualquer playlist do YouTube (ex: `https://www.youtube.com/playlist?list=...` ou um vídeo dentro de uma playlist).
 2. Clique em **"Colar Link"**.
 3. O sistema identificará automaticamente que se trata de uma playlist e abrirá o **Modal de Playlist**.
-4. Você verá a contagem total, capa, miniaturas de todos os vídeos e suas durações:
-   - Use **"✓ Selecionar Todos"** para baixar a playlist completa.
-   - Ou clique nos itens/checkboxes para marcar apenas os vídeos que deseja.
-5. Escolha o formato de saída (Vídeo com resolução ou Áudio MP3).
-6. Clique em **"Baixar Selecionados (X)"**. Os itens entrarão na fila de downloads e serão processados organizadamente.
+4. **🛡️ Reconhecimento Automático de Duplicados:**
+   - Se houver vídeos repetidos com o mesmo nome na playlist, o sistema reconhece a duplicidade e **desmarca a repetição automaticamente**, adicionando o selo `⚠️ Duplicado (Desmarcado)`.
+   - Um aviso destacado exibe quantos duplicados foram desmarcados para você não baixar arquivos repetidos sem querer.
+5. Selecione a quantidade de vídeos desejados ou use **"✓ Selecionar Todos"** (que seleciona todos os itens não-duplicados).
+6. **📁 Escolha da Pasta de Destino:** Defina o diretório de destino dos arquivos da playlist diretamente no campo de pasta com o botão **"Procurar..."**.
+7. **🏷️ Organização por Gênero:** Marque para agrupar as faixas e vídeos baixados em subpastas de seus respectivos gêneros.
+8. Escolha o formato de saída (Vídeo com resolução ou Áudio MP3) e clique em **"Baixar Selecionados (X)"**.
 
 ### 3. Usar o Smart Mode (Modo Ultra Rápido)
 1. Clique no botão de engrenagem ⚙️ e configure suas preferências:
    - Ação padrão (Vídeo 1080p ou Áudio MP3 320k).
-   - Pasta de salvamento no seu Windows.
+   - Pasta padrão de salvamento no seu Windows.
+   - Ativação ou desativação da organização automática por gênero.
 2. Ative a chave do **Smart Mode** no cabeçalho.
-3. A partir de agora, ao colar qualquer link de vídeo avulso, o download começará imediatamente sem abrir janelas extras!
+3. A partir de agora, ao colar qualquer link de vídeo avulso, o download começará imediatamente com suas preferências pré-configuradas!
 
 ### 4. Abrir e Reproduzir seus Arquivos
 - Na seção **Biblioteca de Downloads**, todos os arquivos baixados ficam salvos com título, data e tamanho.
-- Clique em **"📁 Abrir Pasta"** para abrir o Windows Explorer selecionando o arquivo baixado.
+- Clique em **"📁 Abrir Pasta"** para abrir o Windows Explorer selecionando o arquivo baixado (inclusive dentro da subpasta de gênero criada).
 - Clique em **"▶ Reproduzir"** para abrir o arquivo no player padrão do Windows (VLC, Windows Media Player, etc.).
 
 ---

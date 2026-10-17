@@ -63,6 +63,7 @@ def init_db():
 DEFAULT_SETTINGS = {
     "smart_mode": False,
     "download_dir": DEFAULT_DOWNLOAD_DIR,
+    "organize_by_genre": True,        # Organização inteligente em subpastas por gênero musical / categoria
     "default_type": "video",          # 'video' ou 'audio'
     "default_quality": "1080",        # '2160', '1440', '1080', '720', '480', 'best'
     "default_video_format": "mp4",    # 'mp4', 'mkv', 'webm'

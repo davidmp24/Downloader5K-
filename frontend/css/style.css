@@ -1482,6 +1482,60 @@ input:checked + .slider:before {
     padding: 1rem 1.15rem;
 }
 
+/* Duplicados e Detecção */
+.selection-status-group {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.duplicates-notice {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    padding: 3px 8px;
+    border-radius: var(--radius-pill);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.duplicate-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.15);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-left: 0.4rem;
+    vertical-align: middle;
+}
+
+.playlist-item-card.is-duplicate {
+    opacity: 0.6;
+    border-color: rgba(245, 158, 11, 0.25);
+    background: rgba(245, 158, 11, 0.02);
+}
+
+.playlist-item-card.is-duplicate:hover {
+    opacity: 0.9;
+    border-color: rgba(245, 158, 11, 0.45);
+}
+
+.modal-folder-selection {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+}
+
 @media (max-width: 768px) {
     .app-header {
         padding: 0.75rem 1rem;

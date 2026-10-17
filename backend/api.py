@@ -235,6 +235,7 @@ async def smart_download(payload: Dict[str, str] = Body(...)):
         "audio_format": settings.get("default_audio_format", "mp3"),
         "audio_quality": settings.get("default_audio_bitrate", "320"),
         "embed_subtitles": settings.get("embed_subtitles", True),
+        "organize_by_genre": settings.get("organize_by_genre", True),
     }
 
     if download_type == "audio":

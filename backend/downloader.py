@@ -34,6 +34,276 @@ def format_seconds(seconds: Optional[float]) -> str:
         return f"{h:02d}:{m:02d}:{s:02d}"
     return f"{m:02d}:{s:02d}"
 
+import re
+
+def sanitize_folder_name(name: str) -> str:
+    r"""Remove caracteres inválidos para nomes de pastas no Windows (< > : " / \ | ? *)."""
+    clean = re.sub(r'[<>:"/\\|?*]', '', name).strip()
+    return clean or "Geral"
+
+def classify_media_genre(info: Dict[str, Any]) -> str:
+    """
+    Identifica o gênero musical da banda ou categoria do vídeo com base em metadados ricos:
+    - genre
+    - tags
+    - categories
+    - artist / creator / channel
+    - title e description
+    """
+    if not info:
+        return "Geral"
+
+    # 1. Verifica se já existe um gênero explícito de alta fidelidade
+    raw_genre = info.get("genre")
+    if raw_genre and isinstance(raw_genre, str) and len(raw_genre.strip()) > 1:
+        return sanitize_folder_name(raw_genre.title())
+
+    # Agrega todo o texto disponível para análise em caixa baixa
+    title = (info.get("title") or "").lower()
+    uploader = (info.get("uploader") or info.get("channel") or info.get("creator") or "").lower()
+    artist = (info.get("artist") or "").lower()
+    tags = [t.lower() for t in (info.get("tags") or []) if isinstance(t, str)]
+    categories = [c.lower() for c in (info.get("categories") or []) if isinstance(c, str)]
+    desc = (info.get("description") or "")[:1000].lower()
+
+    combined_text = f"{title} {uploader} {artist} {' '.join(tags)} {desc}"
+
+    GENRE_RULES = [
+        # Gêneros Musicais
+        (
+            "Rock & Metal",
+            [
+                "heavy metal", "thrash metal", "death metal", "black metal", "power metal",
+                "hard rock", "punk rock", "pop punk", "grunge", "indie rock", "alt rock",
+                "classic rock", "rock and roll", "rock nacional", "metallica", "iron maiden",
+                "ac/dc", "acdc", "guns n roses", "guns n' roses", "queen", "pink floyd",
+                "led zeppelin", "black sabbath", "deep purple", "scorpions", "bon jovi",
+                "aerosmith", "nirvana", "pearl jam", "soundgarden", "alice in chains",
+                "linkin park", "slipknot", "system of a down", "rammstein", "foo fighters",
+                "red hot chili peppers", "green day", "blink-182", "offspring", "kiss",
+                "judas priest", "megadeth", "slayer", "pantera", "motörhead", "motorhead",
+                "sepultura", "angra", "shaman", "legião urbana", "capital inicial", "titãs",
+                "charlie brown jr", "cazuza", "barão vermelho", "paralamas", "engenheiros do hawaii",
+                "skank", "pitty", "cpm 22", "raimundos", "detonautas", "ira!", "biquini cavadão",
+                "rock", "metal"
+            ]
+        ),
+        (
+            "Sertanejo",
+            [
+                "sertanejo", "sertanejo universitario", "modão", "sofrência",
+                "marília mendonça", "marilia mendonca", "jorge & mateus", "jorge e mateus",
+                "henrique & juliano", "henrique e juliano", "gusttavo lima", "zé neto e cristiano",
+                "ze neto e cristiano", "maiara e maraisa", "luan santana", "ana castela",
+                "hugo e guilherme", "matheus e kauan", "guilherme e benuto", "clayton e romário",
+                "israel e rodolffo", "diego e victor hugo", "chitãozinho e xororó", "chitaozinho",
+                "bruno e marrone", "zeze di camargo", "zezÃ© di camargo", "leandro e leonardo",
+                "leonardo", "eduardo costa", "joão mineiro", "tião carreiro", "tiao carreiro",
+                "simone mendes", "lauana prado", "murilo huff", "felipe araújo", "trio parada dura"
+            ]
+        ),
+        (
+            "Pagode & Samba",
+            [
+                "pagode", "samba", "partido alto", "roda de samba", "pagodão",
+                "thiaguinho", "ferrugem", "sorriso maroto", "menos é mais", "dilsinho",
+                "turma do pagode", "mumuzinho", "péricles", "pericles", "zeca pagodinho",
+                "alcione", "beth carvalho", "revelação", "exaltasamba", "belo", "pixote",
+                "fundo de quintal", "jorge aragão", "diogo nogueira", "art popular",
+                "molejo", "soweto", "raça negra", "grupomenosémais", "kamisa 10"
+            ]
+        ),
+        (
+            "Hip-Hop & Rap",
+            [
+                "hip hop", "hip-hop", "rap", "trap", "boom bap", "drill", "r&b", "rnb",
+                "eminem", "2pac", "tupac", "notorious b.i.g.", "snoop dogg", "50 cent",
+                "dr. dre", "kendrick lamar", "drake", "travis scott", "kanye west",
+                "post malone", "j. cole", "future", "lil wayne", "jay-z",
+                "racionais", "racionais mc's", "sabotage", "emicida", "criolo", "djonga",
+                "filipe ret", "matuê", "matue", "tz da coronel", "kayblack", "veigh",
+                "bk'", "orochi", "l7nnon", "poze do rodo", "major rd", "teto", "wiu",
+                "cabelinho", "conecrew", "tribo da periferia", "hungria hip hop"
+            ]
+        ),
+        (
+            "Eletrônica & Dance",
+            [
+                "electronic", "eletrônica", "eletronica", "edm", "house music", "deep house",
+                "techno", "trance", "dubstep", "drum and bass", "dnb", "synthwave", "psytrance",
+                "alok", "vintage culture", "david guetta", "avicii", "tiësto", "tiesto",
+                "calvin harris", "martin garrix", "daft punk", "marshmello", "swedish house mafia",
+                "armin van buuren", "deadmau5", "skrillex", "cat dealers", "dubdogz",
+                "hardstyle", "electro", "future bass"
+            ]
+        ),
+        (
+            "Funk",
+            [
+                "funk", "funk rj", "funk sp", "mandelão", "funk consciente", "brega funk",
+                "funk melody", "mc ryan", "mc hariel", "mc daniel", "mc paiva", "mc ig",
+                "dennis dj", "kondzilla", "gr6", "mc livinho", "mc pedrinho", "mc kevin",
+                "mc poze", "mc pipokinha", "mc cabelinho", "dj gbr", "dj arana"
+            ]
+        ),
+        (
+            "Pop",
+            [
+                "pop music", "dance pop", "synthpop", "electropop", "k-pop", "kpop", "j-pop",
+                "taylor swift", "michael jackson", "bruno mars", "dua lipa", "madonna",
+                "katy perry", "rihanna", "ariana grande", "lady gaga", "billie eilish",
+                "justin bieber", "ed sheeran", "shakira", "beyoncé", "beyonce", "britney spears",
+                "selena gomez", "miley cyrus", "the weeknd", "harry styles", "olivia rodrigo",
+                "anitta", "ludmilla", "luísa sonza", "gloria groove", "pabllo vittar", "iza",
+                "jão", "vitão", "melim", "tiago iorc", "maroon 5", "coldplay", "imagine dragons",
+                "bts", "blackpink", "twice", "pop"
+            ]
+        ),
+        (
+            "Forró & Piseiro",
+            [
+                "forró", "forro", "piseiro", "pisadinha", "baião", "xote", "arrasta-pé",
+                "joão gomes", "joao gomes", "tarcísio do acordeon", "wesley safadão",
+                "barões da pisadinha", "baroes da pisadinha", "mari fernandez", "xand avião",
+                "calcinha preta", "mastruz com leite", "luiz gonzaga", "dominguinhos",
+                "dorgival dantas", "flávio josé", "limão com mel", "magníficos"
+            ]
+        ),
+        (
+            "MPB & Bossa Nova",
+            [
+                "mpb", "bossa nova", "tropicália", "caetano veloso", "gilberto gil",
+                "chico buarque", "tom jobim", "vinicius de moraes", "joão gilberto",
+                "elis regina", "gal costa", "milton nascimento", "djavan", "maria bethânia",
+                "marisa monte", "seu jorge", "tim maia", "jorge ben jor", "alceu valença",
+                "geraldo azevedo", "zé ramalho", "belchior", "lenine", "maria gadú"
+            ]
+        ),
+        (
+            "Gospel & Religioso",
+            [
+                "gospel", "louvor", "adoração", "worship", "cristã", "cristão", "evangélica",
+                "aline barros", "fernandinho", "gabriela rocha", "isadora pompeo", "midian lima",
+                "anderson freire", "damares", "bruna karla", "padre marcelo", "padre fábio",
+                "morada", "preto no branco", "diante do trono", "hillsong", "bethel music",
+                "elevation worship", "thalles roberto", "cassiane", "eyshila"
+            ]
+        ),
+        (
+            "Reggae",
+            [
+                "reggae", "dub", "ska", "roots reggae", "dancehall", "bob marley",
+                "soja", "natiruts", "maneva", "planta e raiz", "armandinho", "tribo de jah",
+                "ziggy marley", "peter tosh", "ub40", "damian marley", "ponto de equilíbrio"
+            ]
+        ),
+        (
+            "Jazz & Blues",
+            [
+                "jazz", "blues", "smooth jazz", "miles davis", "john coltrane",
+                "louis armstrong", "b.b. king", "bb king", "eric clapton", "stevie wonder",
+                "ray charles", "aretha franklin", "amy winehouse", "norah jones", "nina simone",
+                "ella fitzgerald", "chet baker", "billie holiday", "muddy waters"
+            ]
+        ),
+        (
+            "Clássica & Instrumental",
+            [
+                "classical", "clássica", "classica", "orchestra", "orquestra", "symphony",
+                "sinfonia", "piano solo", "violin", "acoustic instrumental", "soundtrack",
+                "trilha sonora", "ost", "beethoven", "mozart", "bach", "chopin", "vivaldi",
+                "tchaikovsky", "hans zimmer", "john williams", "ennio morricone", "ludovico einaudi",
+                "instrumental"
+            ]
+        ),
+        (
+            "Lo-Fi & Relax",
+            [
+                "lofi", "lo-fi", "chillhop", "chill beats", "study beats", "relaxing beats",
+                "ambient music", "sleep beats", "lo-fi hip hop"
+            ]
+        ),
+        # Categorias de Vídeos Gerais
+        (
+            "Podcasts & Entrevistas",
+            [
+                "podcast", "podcasts", "entrevista", "talk show", "cortes podcast",
+                "flow podcast", "podpah", "inteligencia ltda", "venus podcast", "ironberg podcast",
+                "ticaracaticast", "monark", "poddelas", "cortes do flow"
+            ]
+        ),
+        (
+            "Games",
+            [
+                "gameplay", "gaming", "games", "jogos", "walkthrough", "playthrough",
+                "minecraft", "roblox", "gta", "fortnite", "league of legends", "valorant",
+                "free fire", "counter-strike", "cs:go", "cs2", "playstation", "xbox", "nintendo"
+            ]
+        ),
+        (
+            "Tutoriais & Educação",
+            [
+                "tutorial", "curso", "aula", "education", "como fazer", "passo a passo",
+                "dicas de", "aprenda a", "programação", "desenvolvimento web", "python tutorial"
+            ]
+        ),
+        (
+            "Tecnologia",
+            [
+                "tecnologia", "tecnologia e ciência", "smartphone", "unboxing", "review tech",
+                "hardware", "apple", "samsung", "xiaomi", "computador gamer", "inteligência artificial"
+            ]
+        ),
+        (
+            "Filmes & Trailers",
+            [
+                "trailer", "teaser oficial", "filme completo", "cena de filme", "cinema",
+                "movie trailer", "curta metragem"
+            ]
+        ),
+        (
+            "Esportes",
+            [
+                "futebol", "gols da rodada", "melhores momentos", "brasileirão", "champions league",
+                "ufc", "combate", "basquete", "nba", "fórmula 1", "f1", "esportes"
+            ]
+        ),
+        (
+            "Comédia & Humor",
+            [
+                "comédia", "stand up", "stand-up comedy", "humor", "pegadinha",
+                "comediante", "piadas", "esquetes"
+            ]
+        )
+    ]
+
+    for genre_name, keywords in GENRE_RULES:
+        for kw in keywords:
+            pattern = rf"\b{re.escape(kw)}\b"
+            if re.search(pattern, combined_text):
+                return sanitize_folder_name(genre_name)
+
+    # 3. Categorias padrão da plataforma
+    for cat in categories:
+        if "music" in cat:
+            return "Músicas"
+        elif "gaming" in cat or "jogos" in cat:
+            return "Games"
+        elif "education" in cat or "educação" in cat:
+            return "Educação"
+        elif "tech" in cat or "tecnologia" in cat:
+            return "Tecnologia"
+        elif "comedy" in cat or "comédia" in cat:
+            return "Comédia"
+        elif "sports" in cat or "esportes" in cat:
+            return "Esportes"
+        elif "film" in cat or "animation" in cat:
+            return "Filmes & Animação"
+        elif "news" in cat or "notícias" in cat:
+            return "Notícias"
+
+    return "Geral"
+
 def get_base_ydl_opts(extra_opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Retorna opções base do yt-dlp com bypass de bot (player_client) e cookies de navegador opcionais."""
     settings = load_settings()
@@ -379,6 +649,20 @@ class DownloadTask:
     def _execute_download(self):
         settings = load_settings()
         dest_dir = self.options.get("dest_dir") or settings.get("download_dir")
+        organize_by_genre = self.options.get("organize_by_genre", settings.get("organize_by_genre", False))
+
+        if organize_by_genre:
+            try:
+                inspect_opts = get_base_ydl_opts({"skip_download": True})
+                with yt_dlp.YoutubeDL(inspect_opts) as meta_ydl:
+                    meta_info = meta_ydl.extract_info(self.url, download=False)
+                    if meta_info:
+                        genre = classify_media_genre(meta_info)
+                        dest_dir = os.path.join(dest_dir, genre)
+                        logger.info(f"Mídia '{self.title}' classificada no gênero/pasta: [{genre}]")
+            except Exception as e:
+                logger.warning(f"Não foi possível classificar gênero previamente ({self.task_id[:8]}): {e}")
+
         os.makedirs(dest_dir, exist_ok=True)
 
         outtmpl = os.path.join(dest_dir, "%(title)s.%(ext)s")

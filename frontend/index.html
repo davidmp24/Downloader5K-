@@ -259,6 +259,28 @@
                         </label>
                     </div>
                 </div>
+
+                <!-- Seleção da Pasta de Destino e Organização por Gênero -->
+                <div class="modal-folder-selection">
+                    <label class="form-label">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        Salvar na Pasta (Destino)
+                    </label>
+                    <div class="folder-picker-group">
+                        <input type="text" id="inspectorDownloadDir" class="form-input readonly-input" readonly placeholder="Selecione a pasta de destino..." />
+                        <button type="button" class="btn-secondary" id="btnChooseInspectorFolder">
+                            <span>Alterar Pasta...</span>
+                        </button>
+                    </div>
+                    <div class="form-group" style="margin-top: 0.75rem; margin-bottom: 0;">
+                        <label class="checkbox-label" title="Identifica o gênero musical da banda ou categoria e cria subpastas automaticamente">
+                            <input type="checkbox" id="checkInspectorOrganizeGenre" checked />
+                            <span>📁 Organizar automaticamente em subpastas por gênero musical / categoria</span>
+                        </label>
+                    </div>
+                </div>
             </div>
 
             <div class="modal-footer">
@@ -312,8 +334,11 @@
                             ✕ Desmarcar Todos
                         </button>
                     </div>
-                    <div class="selection-counter-badge">
-                        <span id="playlistSelectedCount">0</span> de <span id="playlistTotalCount">0</span> vídeos selecionados
+                    <div class="selection-status-group">
+                        <span class="duplicates-notice hidden" id="playlistDuplicatesNotice">⚠️ 0 duplicados desmarcados</span>
+                        <div class="selection-counter-badge">
+                            <span id="playlistSelectedCount">0</span> de <span id="playlistTotalCount">0</span> vídeos selecionados
+                        </div>
                     </div>
                 </div>
 
@@ -386,6 +411,29 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- Seleção da Pasta de Destino e Organização por Gênero -->
+                <div class="modal-folder-selection">
+                    <label class="form-label">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                        </svg>
+                        Salvar na Pasta (Destino)
+                    </label>
+                    <div class="folder-picker-group">
+                        <input type="text" id="playlistDownloadDir" class="form-input readonly-input" readonly placeholder="Selecione a pasta de destino..." />
+                        <button type="button" class="btn-secondary" id="btnChoosePlaylistFolder">
+                            <span>Alterar Pasta...</span>
+                        </button>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 0.75rem; margin-bottom: 0;">
+                        <label class="checkbox-label" title="Identifica o gênero musical da banda ou categoria e cria subpastas automaticamente">
+                            <input type="checkbox" id="checkPlaylistOrganizeGenre" checked />
+                            <span>📁 Organizar automaticamente em subpastas por gênero musical / categoria</span>
+                        </label>
+                    </div>
+                </div>
             </div>
 
             <div class="modal-footer">
@@ -434,6 +482,19 @@
                             </svg>
                             <span>Procurar...</span>
                         </button>
+                    </div>
+                </div>
+
+                <div class="settings-box">
+                    <div class="settings-row">
+                        <div class="settings-info">
+                            <h4 class="settings-title">Organização Inteligente por Gênero</h4>
+                            <p class="settings-desc">Identifica o gênero musical da banda ou categoria do vídeo e organiza automaticamente em subpastas (Rock, Pop, Sertanejo, etc.).</p>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="settingOrganizeGenre" checked>
+                            <span class="slider round"></span>
+                        </label>
                     </div>
                 </div>
 

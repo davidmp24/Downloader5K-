@@ -14,6 +14,7 @@ class DownloaderApp {
         this.selectedPlaylistEntries = new Set();
         this.playlistTab = 'video';
         this.historyDisplayLimit = 30;
+        this.duplicateEntriesIndices = new Set();
         this.ws = null;
         this.wsReconnectTimer = null;
 
@@ -92,12 +93,23 @@ class DownloaderApp {
         // Campos do Modal Settings
         this.settingSmartModeToggle = document.getElementById('settingSmartModeToggle');
         this.settingDownloadDir = document.getElementById('settingDownloadDir');
+        this.settingOrganizeGenre = document.getElementById('settingOrganizeGenre');
         this.settingDefaultType = document.getElementById('settingDefaultType');
         this.settingDefaultQuality = document.getElementById('settingDefaultQuality');
         this.settingDefaultAudioFormat = document.getElementById('settingDefaultAudioFormat');
         this.settingDefaultAudioBitrate = document.getElementById('settingDefaultAudioBitrate');
         this.settingEmbedSubs = document.getElementById('settingEmbedSubs');
         this.settingBrowserCookies = document.getElementById('settingBrowserCookies');
+
+        // Campos de Pasta e Gênero nos Modais
+        this.inspectorDownloadDir = document.getElementById('inspectorDownloadDir');
+        this.btnChooseInspectorFolder = document.getElementById('btnChooseInspectorFolder');
+        this.checkInspectorOrganizeGenre = document.getElementById('checkInspectorOrganizeGenre');
+
+        this.playlistDownloadDir = document.getElementById('playlistDownloadDir');
+        this.btnChoosePlaylistFolder = document.getElementById('btnChoosePlaylistFolder');
+        this.checkPlaylistOrganizeGenre = document.getElementById('checkPlaylistOrganizeGenre');
+        this.playlistDuplicatesNotice = document.getElementById('playlistDuplicatesNotice');
 
         // Listas e Contadores
         this.activeDownloadsList = document.getElementById('activeDownloadsList');
@@ -197,6 +209,14 @@ class DownloaderApp {
 
         // Botão Procurar Pasta (Nativo do Windows)
         this.btnChooseFolder.addEventListener('click', () => this.chooseDownloadFolder());
+
+        // Botões de Seleção de Pasta nos Modais de Análise
+        if (this.btnChooseInspectorFolder) {
+            this.btnChooseInspectorFolder.addEventListener('click', () => this.chooseFolderForModal('inspector'));
+        }
+        if (this.btnChoosePlaylistFolder) {
+            this.btnChoosePlaylistFolder.addEventListener('click', () => this.chooseFolderForModal('playlist'));
+        }
 
         // Filtros do Histórico
         this.filterTabs.querySelectorAll('.filter-btn').forEach(btn => {
@@ -357,6 +377,9 @@ class DownloaderApp {
     openSettingsModal() {
         this.settingSmartModeToggle.checked = !!this.settings.smart_mode;
         this.settingDownloadDir.value = this.settings.download_dir || '';
+        if (this.settingOrganizeGenre) {
+            this.settingOrganizeGenre.checked = (this.settings.organize_by_genre !== false);
+        }
         this.settingDefaultType.value = this.settings.default_type || 'video';
         this.settingDefaultQuality.value = this.settings.default_quality || '1080';
         this.settingDefaultAudioFormat.value = this.settings.default_audio_format || 'mp3';
@@ -381,6 +404,8 @@ class DownloaderApp {
             if (data.selected && data.download_dir) {
                 this.settingDownloadDir.value = data.download_dir;
                 this.settings.download_dir = data.download_dir;
+                if (this.inspectorDownloadDir) this.inspectorDownloadDir.value = data.download_dir;
+                if (this.playlistDownloadDir) this.playlistDownloadDir.value = data.download_dir;
                 this.showToast(`Pasta de download alterada para: ${data.download_dir}`, 'success');
             }
         } catch (e) {
@@ -388,10 +413,31 @@ class DownloaderApp {
         }
     }
 
+    async chooseFolderForModal(target) {
+        this.showToast('Selecione a pasta na janela do Windows...', 'info');
+        try {
+            const res = await fetch('/api/select-folder', { method: 'POST' });
+            const data = await res.json();
+            if (data.selected && data.download_dir) {
+                if (target === 'inspector' && this.inspectorDownloadDir) {
+                    this.inspectorDownloadDir.value = data.download_dir;
+                } else if (target === 'playlist' && this.playlistDownloadDir) {
+                    this.playlistDownloadDir.value = data.download_dir;
+                }
+                this.settings.download_dir = data.download_dir;
+                if (this.settingDownloadDir) this.settingDownloadDir.value = data.download_dir;
+                this.showToast(`Pasta de destino definida: ${data.download_dir}`, 'success');
+            }
+        } catch (e) {
+            this.showToast('Erro ao selecionar pasta.', 'error');
+        }
+    }
+
     async saveSettingsFromModal() {
         const payload = {
             smart_mode: this.settingSmartModeToggle.checked,
             download_dir: this.settingDownloadDir.value,
+            organize_by_genre: this.settingOrganizeGenre ? this.settingOrganizeGenre.checked : true,
             default_type: this.settingDefaultType.value,
             default_quality: this.settingDefaultQuality.value,
             default_audio_format: this.settingDefaultAudioFormat.value,
@@ -567,6 +613,14 @@ class DownloaderApp {
             this.modalAudioList.appendChild(card);
         });
 
+        // Atualiza campos de pasta e organização de gênero
+        if (this.inspectorDownloadDir) {
+            this.inspectorDownloadDir.value = this.settings.download_dir || '';
+        }
+        if (this.checkInspectorOrganizeGenre) {
+            this.checkInspectorOrganizeGenre.checked = (this.settings.organize_by_genre !== false);
+        }
+
         // Configuração inicial de aba
         this.switchInspectorTab('video');
         this.inspectorModal.classList.remove('hidden');
@@ -594,8 +648,17 @@ class DownloaderApp {
     }
 
     // ==========================================
-    // Modal e Seleção de Playlist
+    // Modal e Seleção de Playlist com Detecção de Duplicatas
     // ==========================================
+    normalizeTitle(title) {
+        if (!title) return '';
+        return title
+            .toLowerCase()
+            .replace(/[\(\)\[\]\{\}\-_,.:;!?|/\\~`"'^]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
     openPlaylistModal(playlistData) {
         this.currentPlaylist = playlistData;
         const entries = playlistData.entries || [];
@@ -606,23 +669,63 @@ class DownloaderApp {
         this.playlistTotalCount.textContent = entries.length;
         this.playlistThumb.src = playlistData.thumbnail || 'https://placehold.co/140x80/141824/64748b?text=Playlist';
 
-        // Por padrão, seleciona todos os vídeos da playlist
-        this.selectedPlaylistEntries = new Set(entries.map((_, idx) => idx));
+        // Atualiza campos de pasta e organização por gênero no modal de playlist
+        if (this.playlistDownloadDir) {
+            this.playlistDownloadDir.value = this.settings.download_dir || '';
+        }
+        if (this.checkPlaylistOrganizeGenre) {
+            this.checkPlaylistOrganizeGenre.checked = (this.settings.organize_by_genre !== false);
+        }
+
+        // Lógica de Detecção Inteligente de Vídeos Duplicados
+        const seenTitles = new Map();
+        const seenIds = new Set();
+        let duplicateCount = 0;
+        this.duplicateEntriesIndices = new Set();
+        this.selectedPlaylistEntries = new Set();
 
         this.playlistItemsList.innerHTML = '';
         entries.forEach((entry, idx) => {
+            const normTitle = this.normalizeTitle(entry.title);
+            let isDuplicate = false;
+            let duplicateReason = '';
+
+            if (entry.id && seenIds.has(entry.id)) {
+                isDuplicate = true;
+                duplicateReason = 'mesmo ID';
+            } else if (normTitle && seenTitles.has(normTitle)) {
+                isDuplicate = true;
+                const firstIdx = seenTitles.get(normTitle);
+                duplicateReason = `mesmo título que #${firstIdx + 1}`;
+            } else {
+                if (normTitle) seenTitles.set(normTitle, idx);
+                if (entry.id) seenIds.add(entry.id);
+            }
+
+            if (isDuplicate) {
+                duplicateCount++;
+                this.duplicateEntriesIndices.add(idx);
+                // Permanece DESMARCADO automaticamente!
+            } else {
+                // Vídeos únicos são selecionados por padrão
+                this.selectedPlaylistEntries.add(idx);
+            }
+
             const card = document.createElement('div');
-            card.className = 'playlist-item-card selected';
+            card.className = `playlist-item-card ${isDuplicate ? 'is-duplicate' : 'selected'}`;
             card.id = `pl-item-${idx}`;
 
             card.innerHTML = `
-                <input type="checkbox" class="playlist-item-check" data-index="${idx}" checked />
+                <input type="checkbox" class="playlist-item-check" data-index="${idx}" ${isDuplicate ? '' : 'checked'} />
                 <span class="playlist-item-index">#${entry.index || (idx + 1)}</span>
                 <div class="playlist-item-thumb">
                     <img src="${entry.thumbnail || 'https://placehold.co/70x40/141824/64748b?text=Thumb'}" alt="Thumb" onerror="this.src='https://placehold.co/70x40/141824/64748b?text=Thumb'"/>
                 </div>
                 <div class="playlist-item-info">
-                    <h5 class="playlist-item-title" title="${entry.title}">${entry.title}</h5>
+                    <h5 class="playlist-item-title" title="${entry.title}">
+                        ${entry.title}
+                        ${isDuplicate ? `<span class="duplicate-tag" title="Vídeo duplicado (${duplicateReason}) desmarcado automaticamente para evitar repetição">⚠️ Duplicado (Desmarcado)</span>` : ''}
+                    </h5>
                 </div>
                 <span class="playlist-item-duration">${entry.duration_formatted || '--:--'}</span>
             `;
@@ -642,6 +745,17 @@ class DownloaderApp {
 
             this.playlistItemsList.appendChild(card);
         });
+
+        // Exibe aviso na barra de ferramentas se houver duplicatas desmarcadas
+        if (this.playlistDuplicatesNotice) {
+            if (duplicateCount > 0) {
+                this.playlistDuplicatesNotice.textContent = `⚠️ ${duplicateCount} duplicado(s) desmarcado(s)`;
+                this.playlistDuplicatesNotice.classList.remove('hidden');
+                this.showToast(`${duplicateCount} vídeo(s) com o mesmo nome foram desmarcados automaticamente.`, 'info');
+            } else {
+                this.playlistDuplicatesNotice.classList.add('hidden');
+            }
+        }
 
         this.updatePlaylistCounter();
         this.switchPlaylistTab('video');
@@ -671,15 +785,20 @@ class DownloaderApp {
         const entries = this.currentPlaylist.entries || [];
 
         if (selectAll) {
-            this.selectedPlaylistEntries = new Set(entries.map((_, i) => i));
+            // Seleciona todos os vídeos únicos (evitando selecionar duplicatas novamente)
+            this.selectedPlaylistEntries = new Set(
+                entries.map((_, i) => i).filter(i => !this.duplicateEntriesIndices.has(i))
+            );
         } else {
             this.selectedPlaylistEntries.clear();
         }
 
         this.playlistItemsList.querySelectorAll('.playlist-item-card').forEach((card, idx) => {
-            card.classList.toggle('selected', selectAll);
+            const isDup = this.duplicateEntriesIndices.has(idx);
+            const shouldCheck = selectAll ? !isDup : false;
+            card.classList.toggle('selected', shouldCheck);
             const cb = card.querySelector('.playlist-item-check');
-            if (cb) cb.checked = selectAll;
+            if (cb) cb.checked = shouldCheck;
         });
 
         this.updatePlaylistCounter();
@@ -708,8 +827,17 @@ class DownloaderApp {
 
         let downloadType = this.playlistTab;
         let formatNote = '';
+
+        const destDir = (this.playlistDownloadDir && this.playlistDownloadDir.value.trim())
+            ? this.playlistDownloadDir.value.trim()
+            : (this.settings.download_dir || '');
+        const organizeGenre = this.checkPlaylistOrganizeGenre
+            ? this.checkPlaylistOrganizeGenre.checked
+            : (this.settings.organize_by_genre !== false);
+
         let options = {
-            dest_dir: this.settings.download_dir
+            dest_dir: destDir,
+            organize_by_genre: organizeGenre
         };
 
         if (downloadType === 'video') {
@@ -782,8 +910,16 @@ class DownloaderApp {
         const isVideo = this.selectedTab === 'video';
 
         let formatNote = '';
+        const destDir = (this.inspectorDownloadDir && this.inspectorDownloadDir.value.trim())
+            ? this.inspectorDownloadDir.value.trim()
+            : (this.settings.download_dir || '');
+        const organizeGenre = this.checkInspectorOrganizeGenre
+            ? this.checkInspectorOrganizeGenre.checked
+            : (this.settings.organize_by_genre !== false);
+
         let options = {
-            dest_dir: this.settings.download_dir
+            dest_dir: destDir,
+            organize_by_genre: organizeGenre
         };
 
         if (isVideo) {
