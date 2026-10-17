@@ -20,21 +20,52 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("DownloaderAPI")
 
 class ConnectionManager:
-    """Gerencia conexões WebSocket ativas para streaming em tempo real."""
+    """Gerencia conexões WebSocket ativas para streaming em tempo real e auto-shutdown."""
 
     def __init__(self):
         self.active_connections: List[WebSocket] = []
         self.loop = None
+        self.shutdown_timer: Optional[asyncio.TimerHandle] = None
+        self.has_connected_once: bool = False
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
-        logger.info(f"Cliente WebSocket conectado. Total: {len(self.active_connections)}")
+        self.has_connected_once = True
+
+        # Cancela qualquer contagem de desligamento se uma nova aba/recarregamento ocorrer
+        if self.shutdown_timer:
+            self.shutdown_timer.cancel()
+            self.shutdown_timer = None
+            logger.info("Nova aba/conexão detectada. Desligamento automático cancelado.")
+
+        logger.info(f"Cliente WebSocket conectado. Total ativos: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
-            logger.info(f"Cliente WebSocket desconectado. Total: {len(self.active_connections)}")
+            logger.info(f"Cliente WebSocket desconectado. Total ativos: {len(self.active_connections)}")
+
+        # Se não há mais nenhuma aba ativa e o usuário já abriu o sistema anteriormente, inicia timer para desligamento
+        if len(self.active_connections) == 0 and self.has_connected_once:
+            self.schedule_shutdown(delay=4.0)
+
+    def schedule_shutdown(self, delay: float = 4.0):
+        """Agenda encerramento seguro do processo python caso nenhuma aba seja aberta."""
+        if self.shutdown_timer:
+            self.shutdown_timer.cancel()
+
+        logger.info(f"Nenhuma janela web ativa. Servidor será encerrado em {delay}s...")
+
+        def _do_shutdown():
+            logger.info("Janela do sistema fechada pelo usuário. Encerrando servidor Python automaticamente.")
+            os._exit(0)
+
+        if self.loop and self.loop.is_running():
+            self.shutdown_timer = self.loop.call_later(delay, _do_shutdown)
+
+        if self.loop and self.loop.is_running():
+            self.shutdown_timer = self.loop.call_later(delay, _do_shutdown)
 
     async def broadcast_async(self, message: Dict[str, Any]):
         disconnected = []
@@ -237,6 +268,32 @@ async def cancel_download(task_id: str):
 async def delete_download(task_id: str, delete_file: bool = Query(False)):
     success = download_manager.delete_download(task_id, delete_file=delete_file)
     return {"success": success}
+
+@app.delete("/api/downloads/clear/all")
+async def clear_all_downloads(delete_files: bool = Query(False)):
+    """Limpa todo o histórico de downloads do banco de dados e da tela."""
+    if delete_files:
+        with get_db_connection() as conn:
+            rows = conn.execute("SELECT file_path FROM downloads WHERE file_path IS NOT NULL").fetchall()
+            for r in rows:
+                fp = r["file_path"]
+                if fp and os.path.exists(fp):
+                    try:
+                        os.remove(fp)
+                    except Exception:
+                        pass
+
+    from backend.db import execute_write
+    execute_write("DELETE FROM downloads")
+    download_manager.active_tasks.clear()
+    return {"success": True, "cleared": True}
+
+@app.post("/api/shutdown")
+async def shutdown_system():
+    """Recebe notificação de fechamento do navegador para desligar o servidor Python automaticamente."""
+    logger.info("Recebida notificação de fechamento da aba via beacon.")
+    ws_manager.schedule_shutdown(delay=2.5)
+    return {"status": "shutting_down"}
 
 @app.post("/api/downloads/{task_id}/open-folder")
 async def open_download_folder(task_id: str):

@@ -37,6 +37,10 @@ Projetado para operar por meio de uma **interface Web moderna com tema escuro pr
 | 🎧 **Extração de Áudio de Estúdio** | Extração de áudio cristalino em **MP3 (até 320 kbps)**, M4A/AAC, FLAC Lossless, WAV e OPUS com **incorporação automática da thumbnail como capa do álbum** e metadados ID3. |
 | 📑 **Detecção Inteligente de Playlists** | Identifica links de playlists e vídeos individuais em playlists, abrindo um modal interativo para **selecionar vídeos específicos ou baixar todos em lote**. |
 | 🚦 **Fila Semafórica Anti-Travamento** | Gerencia até 3 downloads simultâneos em paralelo com fila automática, evitando bloqueios de IP (HTTP 429), consumo excessivo de banda e travamentos de disco. |
+| 📜 **Rolagem Interna & Limite de Exibição** | A Biblioteca possui barra de rolagem dedicada no canto e limite de visualização com "Exibir mais", permitindo rolar os downloads sem precisar rolar a página inteira. |
+| 🧹 **Botão Limpar Biblioteca** | Limpe e esvazie completamente a lista de downloads com 1 clique. |
+| 🔇 **Inicialização 100% Oculta** | Inicie pelo `iniciar.bat` ou `iniciar.vbs` de forma invisível sem janelas pretas de console abertas. O navegador abre automaticamente. |
+| 🛑 **Auto-Encerramento Inteligente** | Ao fechar a página do sistema no navegador, o servidor Python é finalizado automaticamente em segundo plano, liberando a porta e evitando conflitos. |
 | 🗄️ **Banco de Dados SQLite (WAL Mode)** | Histórico permanente com filtros (Todos, Vídeos, Áudios, Concluídos) e busca rápida. O modo WAL garante que o banco nunca trave sob alta concorrência. |
 | 📁 **Integração Total com Windows 10** | Botão **"📁 Abrir Pasta"** (revela e seleciona o arquivo diretamente no Windows Explorer) e botão **"▶ Reproduzir"** (abre no reprodutor padrão do sistema). |
 | 🗂️ **Seletor de Diretório Nativo** | Escolha graficamente onde deseja salvar seus arquivos usando a janela nativa do Windows através do botão "Procurar...". |
@@ -83,19 +87,19 @@ Projetado para operar por meio de uma **interface Web moderna com tema escuro pr
 
 ---
 
-### Método 1: Inicialização Rápida (1 Duplo-Clique)
+### Método 1: Inicialização 100% Oculta e Automática (Recomendado)
 
 1. Baixe ou clone o repositório em sua máquina:
    ```bash
    git clone https://github.com/davidmp24/Downloader5K-.git
    cd Downloader5K-
    ```
-2. Dê um **duplo clique no arquivo `iniciar.bat`**.
-3. O script irá automaticamente:
-   - Criar o ambiente virtual `.venv` (se ainda não existir).
-   - Instalar todas as dependências necessárias do `requirements.txt`.
-   - Iniciar o servidor local.
-   - Abrir o seu navegador padrão automaticamente em **`http://127.0.0.1:8000`**.
+2. Dê um **duplo clique no arquivo `iniciar.bat`** (ou `iniciar.vbs`).
+3. O sistema irá automaticamente:
+   - Configurar o ambiente virtual `.venv` e dependências caso seja a primeira execução.
+   - **Iniciar o servidor de forma totalmente invisível** em segundo plano (sem janelas pretas de terminal abertas).
+   - **Abrir o seu navegador padrão automaticamente** em **`http://127.0.0.1:8000`**.
+4. **Encerramento Automático:** Ao terminar de usar, basta **fechar a aba ou janela do navegador**. O servidor Python detecta o encerramento e é finalizado automaticamente em segundo plano, liberando a porta e a memória RAM sem necessidade de comandos no terminal.
 
 ---
 

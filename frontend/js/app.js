@@ -13,6 +13,7 @@ class DownloaderApp {
         this.currentPlaylist = null;
         this.selectedPlaylistEntries = new Set();
         this.playlistTab = 'video';
+        this.historyDisplayLimit = 30;
         this.ws = null;
         this.wsReconnectTimer = null;
 
@@ -106,6 +107,7 @@ class DownloaderApp {
         this.historyList = document.getElementById('historyList');
         this.emptyHistoryState = document.getElementById('emptyHistoryState');
         this.historyCounter = document.getElementById('historyCounter');
+        this.btnClearHistory = document.getElementById('btnClearHistory');
         this.filterTabs = document.getElementById('filterTabs');
         this.inputSearchHistory = document.getElementById('inputSearchHistory');
 
@@ -210,6 +212,20 @@ class DownloaderApp {
         this.inputSearchHistory.addEventListener('input', (e) => {
             this.searchQuery = e.target.value.toLowerCase().trim();
             this.renderHistory();
+        });
+
+        // Botão Limpar Histórico / Biblioteca
+        if (this.btnClearHistory) {
+            this.btnClearHistory.addEventListener('click', () => this.clearHistory());
+        }
+
+        // Notificação de encerramento do backend ao fechar ou descarregar a aba do navegador
+        window.addEventListener('beforeunload', () => {
+            try {
+                navigator.sendBeacon('/api/shutdown');
+            } catch (e) {
+                // Silencioso se não suportado
+            }
         });
     }
 
@@ -961,9 +977,14 @@ class DownloaderApp {
         this.emptyHistoryState.classList.toggle('hidden', filtered.length > 0);
 
         // Limpa lista exceto o emptyState
-        this.historyList.querySelectorAll('.history-card').forEach(el => el.remove());
+        this.historyList.querySelectorAll('.history-card, .btn-load-more').forEach(el => el.remove());
 
-        filtered.forEach(item => {
+        if (filtered.length === 0) return;
+
+        const totalCount = filtered.length;
+        const displayedItems = filtered.slice(0, this.historyDisplayLimit);
+
+        displayedItems.forEach(item => {
             const card = document.createElement('div');
             card.className = 'history-card';
 
@@ -1002,6 +1023,49 @@ class DownloaderApp {
 
             this.historyList.appendChild(card);
         });
+
+        // Botão Carregar Mais se houver mais itens que o limite
+        if (totalCount > this.historyDisplayLimit) {
+            const loadMoreBtn = document.createElement('button');
+            loadMoreBtn.className = 'btn-load-more';
+            const remaining = totalCount - this.historyDisplayLimit;
+            loadMoreBtn.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+                Exibir mais (${remaining} itens restantes)
+            `;
+            loadMoreBtn.addEventListener('click', () => {
+                this.historyDisplayLimit += 30;
+                this.renderHistory();
+            });
+            this.historyList.appendChild(loadMoreBtn);
+        }
+    }
+
+    async clearHistory() {
+        if (!this.history || this.history.length === 0) {
+            this.showToast('A biblioteca já está vazia.', 'info');
+            return;
+        }
+
+        if (!confirm('Deseja limpar todos os downloads da biblioteca? A tela ficará vazia.')) {
+            return;
+        }
+
+        try {
+            const res = await fetch('/api/downloads/clear/all', { method: 'DELETE' });
+            if (res.ok) {
+                this.history = [];
+                this.renderHistory();
+                this.showToast('Biblioteca de downloads limpa com sucesso!', 'success');
+            } else {
+                const err = await res.json();
+                throw new Error(err.detail || 'Erro ao limpar downloads.');
+            }
+        } catch (err) {
+            this.showToast(err.message, 'error');
+        }
     }
 
     async playMedia(id) {
