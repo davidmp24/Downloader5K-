@@ -457,6 +457,11 @@ async def select_folder_dialog(save_as_default: bool = Query(True)):
 if os.path.exists(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def serve_favicon():
+        return FileResponse(os.path.join(FRONTEND_DIR, "favicon.svg"), media_type="image/svg+xml")
+
     @app.get("/")
     async def serve_index():
         return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+

@@ -47,4 +47,14 @@ tmp/
 # Arquivos de Sistema Operacional
 Thumbs.db
 desktop.ini
-.DS_Store
+# Documentos reservados, relatórios e auditorias internas
+auditoria*
+relatorio*
+Plano de ação*
+*.audit
+scratch/
+
+# Binários locais (FFmpeg autobaixado)
+bin/
+
+

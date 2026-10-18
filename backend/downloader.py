@@ -310,10 +310,139 @@ def classify_media_genre(info: Dict[str, Any]) -> str:
 
     return "Geral"
 
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOCAL_BIN_DIR = os.path.join(PROJECT_ROOT, "bin")
+
+_ffmpeg_lock = threading.Lock()
+_ffmpeg_checked = False
+
+def get_ffmpeg_path() -> Optional[str]:
+    """
+    Retorna o caminho do diretório contendo ffmpeg e ffprobe.
+    1. Verifica primeiro a pasta local bin/ do projeto.
+    2. Em seguida, verifica o PATH global do sistema.
+    """
+    local_ffmpeg = os.path.join(LOCAL_BIN_DIR, "ffmpeg.exe" if sys.platform.startswith("win") else "ffmpeg")
+    local_ffprobe = os.path.join(LOCAL_BIN_DIR, "ffprobe.exe" if sys.platform.startswith("win") else "ffprobe")
+    if os.path.isfile(local_ffmpeg) and os.path.isfile(local_ffprobe):
+        return LOCAL_BIN_DIR
+
+    system_ffmpeg = shutil.which("ffmpeg")
+    system_ffprobe = shutil.which("ffprobe")
+    if system_ffmpeg and system_ffprobe:
+        return os.path.dirname(os.path.abspath(system_ffmpeg))
+
+    return None
+
+def ensure_ffmpeg(progress_callback: Optional[Callable[[str], None]] = None) -> Optional[str]:
+    """
+    Garante que o FFmpeg esteja disponível.
+    Se não for encontrado nem localmente nem no PATH, realiza o download
+    automático do build estável e extrai para a pasta bin/ do projeto.
+    """
+    global _ffmpeg_checked
+    ffmpeg_dir = get_ffmpeg_path()
+    if ffmpeg_dir:
+        # Garante que o diretório esteja no PATH do processo em execução
+        if ffmpeg_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = f"{ffmpeg_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+        _ffmpeg_checked = True
+        return ffmpeg_dir
+
+    with _ffmpeg_lock:
+        # Dupla checagem após adquirir lock
+        ffmpeg_dir = get_ffmpeg_path()
+        if ffmpeg_dir:
+            return ffmpeg_dir
+
+        if not sys.platform.startswith("win"):
+            logger.warning("FFmpeg não encontrado no sistema. Em Linux/macOS, instale via gerenciador de pacotes.")
+            return None
+
+        import urllib.request
+        import zipfile
+        import tempfile
+
+        os.makedirs(LOCAL_BIN_DIR, exist_ok=True)
+        msg = "FFmpeg não detectado. Baixando automaticamente para a pasta bin/... (Isso ocorre apenas na primeira execução)"
+        logger.info(msg)
+        if progress_callback:
+            progress_callback(msg)
+
+        # URL oficial do build essencial do FFmpeg para Windows
+        download_urls = [
+            "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        ]
+
+        temp_zip = os.path.join(tempfile.gettempdir(), f"ffmpeg_dl5k_{uuid.uuid4().hex[:6]}.zip")
+        download_success = False
+
+        for url in download_urls:
+            try:
+                logger.info(f"Tentando baixar FFmpeg de: {url}")
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 Downloader5K"})
+                with urllib.request.urlopen(req, timeout=120) as response, open(temp_zip, "wb") as out_file:
+                    total_size = int(response.headers.get("content-length", 0))
+                    downloaded = 0
+                    chunk_size = 1024 * 512  # 512 KB
+                    while True:
+                        chunk = response.read(chunk_size)
+                        if not chunk:
+                            break
+                        out_file.write(chunk)
+                        downloaded += len(chunk)
+                        if total_size > 0 and progress_callback and downloaded % (1024 * 1024 * 5) < chunk_size:
+                            pct = int((downloaded / total_size) * 100)
+                            progress_callback(f"Baixando FFmpeg essencial: {pct}% ({downloaded // (1024*1024)}MB / {total_size // (1024*1024)}MB)...")
+
+                download_success = True
+                break
+            except Exception as e:
+                logger.warning(f"Falha ao baixar FFmpeg de {url}: {e}")
+                if os.path.exists(temp_zip):
+                    try:
+                        os.remove(temp_zip)
+                    except Exception:
+                        pass
+
+        if not download_success:
+            logger.error("Não foi possível baixar o FFmpeg automaticamente de nenhum espelho.")
+            return None
+
+        try:
+            logger.info("Extraindo binários do FFmpeg para bin/...")
+            with zipfile.ZipFile(temp_zip, "r") as zf:
+                for member in zf.namelist():
+                    filename = os.path.basename(member).lower()
+                    if filename in ("ffmpeg.exe", "ffprobe.exe", "ffplay.exe"):
+                        source = zf.open(member)
+                        target_path = os.path.join(LOCAL_BIN_DIR, filename)
+                        with open(target_path, "wb") as target_file:
+                            shutil.copyfileobj(source, target_file)
+                        logger.info(f"Binário extraído: {target_path}")
+
+            # Adiciona ao PATH da sessão
+            os.environ["PATH"] = f"{LOCAL_BIN_DIR}{os.pathsep}{os.environ.get('PATH', '')}"
+            _ffmpeg_checked = True
+            logger.info("FFmpeg configurado e pronto para uso com sucesso!")
+            return LOCAL_BIN_DIR
+        except Exception as e:
+            logger.error(f"Erro ao descompactar FFmpeg: {e}")
+            return None
+        finally:
+            if os.path.exists(temp_zip):
+                try:
+                    os.remove(temp_zip)
+                except Exception:
+                    pass
+
 def get_base_ydl_opts(extra_opts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Retorna opções base do yt-dlp com suporte a múltiplos clientes para evitar bot detection e cookies opcionais."""
+    """Retorna opções base do yt-dlp com suporte a múltiplos clientes para evitar bot detection, cookies e localização do FFmpeg."""
     settings = load_settings()
     browser_cookies = settings.get("browser_cookies", "none")
+
+    ffmpeg_dir = ensure_ffmpeg()
 
     opts: Dict[str, Any] = {
         "quiet": True,
@@ -324,6 +453,9 @@ def get_base_ydl_opts(extra_opts: Optional[Dict[str, Any]] = None) -> Dict[str, 
             }
         }
     }
+
+    if ffmpeg_dir:
+        opts["ffmpeg_location"] = ffmpeg_dir
 
     if browser_cookies and browser_cookies != "none":
         try:

@@ -68,6 +68,15 @@ if __name__ == "__main__":
     except Exception:
         pass
 
+    # Garante a presença do FFmpeg (detecta ou faz download automático caso novo usuário)
+    try:
+        from backend.downloader import ensure_ffmpeg
+        ffmpeg_found = ensure_ffmpeg(progress_callback=lambda msg: print(f" [FFmpeg] {msg}"))
+        if ffmpeg_found:
+            print(f" * FFmpeg Ativo:    {ffmpeg_found}")
+    except Exception as e:
+        print(f" [Aviso] Verificação de FFmpeg: {e}")
+
     # Inicia abertura automática do navegador em uma thread separada
     threading.Thread(target=open_browser, daemon=True).start()
 
